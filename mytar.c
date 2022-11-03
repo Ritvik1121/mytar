@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <math.h>
 #define BLOCK 512;
+
+int octaltodec(char *number, int len);
+int table_mode(int file, int v, char **args);
 
 int main(int argc, char *argv[]){
     int i;
@@ -12,6 +16,9 @@ int main(int argc, char *argv[]){
     int S;
     int file;
 
+    char **arguments = (char **) malloc(10 * sizeof(char *));
+    int table_mode(int file, int v, char **args);
+
     char *modes;
     if(argc <= 2){
         printf("1. usage mytar [ctxvS]f tarfile [ path [ ... ] ]");
@@ -20,6 +27,7 @@ int main(int argc, char *argv[]){
     modes = argv[1];
     arg2len = strlen(argv[1]) -1;
     if(modes[arg2len] != 'f'){
+        printf("%c\n", modes[arg2len]);
         printf("2. usage mytar [ctxvS]f tarfile [ path [ ... ] ]");
         exit(EXIT_FAILURE);
     }
@@ -42,31 +50,76 @@ int main(int argc, char *argv[]){
 
     }
 
-    if(mode == 'c'){
-        file = open(argv[2], O_RDWR | O_CREAT | O_TRUNC);
-        create_mode(file, v, argv[3]);
+    int j = 0;
+
+    for(i = 3; i < argc; i++){
+        arguments[j] = argv[i];
+        j++;
     }
 
     if(mode == 't'){
         file = open(argv[2], O_RDONLY);
-        table_mode(file, v, argv[3]);
+        table_mode(file, v, arguments);
     }
 
-     if(mode == 'x'){
-        file = open(argv[2], O_RDONLY);
-        extract_mode(file, v, argv[3]);
+
+}
+
+
+
+int table_mode(int file, int v, char **args){
+    unsigned char buffer[512];
+    int n;
+    int i = 0;
+    int num;
+    int k;
+    char name[200];
+    char size[12];
+    int num_blocks;
+    int new_index;
+
+    while((n = read(file, buffer, 100)) > 0){
+
+        i = 0;
+
+        while(i < 100 || buffer[i] == '\0'){
+            name[i] = buffer[i];
+            i++;
+        }
+
+        if(name[0] == '\0'){
+            return 0;
+        }
+
+        name[i] = '\0';
+        printf("%s\n", name);
+
+        lseek(file, 23, SEEK_CUR);
+        k = read(file, size, 12);
+        num = octaltodec(size, 12);
+
+        if(num == 0){
+            num_blocks = 0;
+        }
+        num_blocks = (num / 512) + 1;
+        new_index = 377 + (512 * num_blocks);
+        lseek(file, new_index, SEEK_CUR);
     }
 
-}
 
-int create_mode(int file, int v, char * args){
 
 }
 
-int table_mode(int file, int v, char * args){
+int octaltodec(char *number, int len){
+    int i;
+    int curr;
+    int power = 0;
+    int total = 0;
+    for(i = len -1; i > 0; i--){
 
-}
-
-int extract_mode(int file, int v, char * args){
-
+        curr = number[i] - '0';
+        total = total + (curr * (pow(8, power)));
+        power++;
+    }
+    return total;
 }
