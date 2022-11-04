@@ -6,7 +6,7 @@
 #define BLOCK 512;
 
 int octaltodec(char *number, int len);
-int table_mode(int file, int v, char **args);
+int table_mode(int file, int v, char **args, int argc);
 
 int main(int argc, char *argv[]){
     int i;
@@ -17,7 +17,6 @@ int main(int argc, char *argv[]){
     int file;
 
     char **arguments = (char **) malloc(10 * sizeof(char *));
-    int table_mode(int file, int v, char **args);
 
     char *modes;
     if(argc <= 2){
@@ -51,15 +50,17 @@ int main(int argc, char *argv[]){
     }
 
     int j = 0;
+    int count;
 
     for(i = 3; i < argc; i++){
         arguments[j] = argv[i];
         j++;
+        count++;
     }
 
     if(mode == 't'){
         file = open(argv[2], O_RDONLY);
-        table_mode(file, v, arguments);
+        table_mode(file, v, arguments, count);
     }
 
 
@@ -67,46 +68,72 @@ int main(int argc, char *argv[]){
 
 
 
-int table_mode(int file, int v, char **args){
+int table_mode(int file, int v, char **args, int arg){
     unsigned char buffer[512];
     int n;
     int i = 0;
     int num;
     int k;
-    char name[200];
+    char name[256];
+    char prefix[155];
     char size[12];
     int num_blocks;
     int new_index;
+    int len;
 
     while((n = read(file, buffer, 100)) > 0){
 
-        i = 0;
-
-        while(i < 100 || buffer[i] == '\0'){
-            name[i] = buffer[i];
-            i++;
-        }
-
-        if(name[0] == '\0'){
-            return 0;
-        }
-
-        name[i] = '\0';
-        printf("%s\n", name);
-
+        /*Get the size*/
         lseek(file, 23, SEEK_CUR);
         k = read(file, size, 12);
         num = octaltodec(size, 12);
 
+        /*Get the prefix*/
+        lseek(file, 210, SEEK_CUR);
+        k = read(file, prefix, 155);
+
+        /*Add prefix if there is something there*/
+        i = 0;
+        if(prefix[0] != '\0'){
+            printf("here");
+            while(i < 155 || prefix[i] != '\0'){
+                name[i] = prefix[i];
+                i++;
+            }
+        }
+
+        /*Add the name field*/
+        while(i < 100 || buffer[i] != '\0'){
+            name[i] = buffer[i];
+            i++;
+        }
+
+        /*check if the name is null if so then stop*/
+        if(name[0] == '\0'){
+            return 0;
+        }
+
+        /*If no arguments then print or else only print descendents*/
+        if(arg == 0){
+            printf("%s\n", name);
+        }
+        else{
+            for(i = 0; i < arg; i++){
+                if(strstr(name, args[i]) != NULL){
+                    printf("%s\n", name);
+                }
+            }
+        }
+
+        /*Get offset to go to next header then lseek*/
+        num_blocks = (num / 512) + 1;
         if(num == 0){
             num_blocks = 0;
         }
-        num_blocks = (num / 512) + 1;
-        new_index = 377 + (512 * num_blocks);
+        new_index = 12 + (512 * num_blocks);
         lseek(file, new_index, SEEK_CUR);
+
     }
-
-
 
 }
 
