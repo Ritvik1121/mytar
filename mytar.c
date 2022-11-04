@@ -123,6 +123,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
     off_t size;
     time_t mtime;
     char typeflag, nul = '\0';
+    uint8_t *chksum_ptr;
 
     tarfile = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
     for (i = 3; i < argc; i++) {
@@ -227,13 +228,16 @@ void tar_create(int argc, char **argv, int flags[6]) {
         buf = (char *)malloc(sizeof(char) * BLKSIZE);
         if (read(tarfile, buf, BLKSIZE) == -1)
             sys_error("read");
-        for (j = 0; j < BLKSIZE; j++)
-            chksum += (unsigned int)buf[j];
+        chksum_ptr = &buf[0];
+        for (j = 0; j < BLKSIZE; j++) {
+            chksum += *chksum_ptr;
+            chksum_ptr++;
+        }
         free(buf);
         buf = (char *)malloc(sizeof(char) * 7);
         buf = decToOctal(chksum, buf, 7);
         lseek(tarfile, 148, SEEK_SET);
-        safe_write(tarfile, buf, 7);    // Checksum wrong
+        safe_write(tarfile, buf, 7);
         safe_write(tarfile, &nul, 1);
         free(buf);
 
