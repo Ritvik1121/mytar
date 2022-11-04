@@ -233,7 +233,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
         buf = (char *)malloc(sizeof(char) * 7);
         buf = decToOctal(chksum, buf, 7);
         lseek(tarfile, 148, SEEK_SET);
-        safe_write(tarfile, buf, 7);
+        safe_write(tarfile, buf, 7);    // Checksum wrong
         safe_write(tarfile, &nul, 1);
         free(buf);
 
@@ -256,8 +256,10 @@ void tar_create(int argc, char **argv, int flags[6]) {
                 /* Stop blocks */
                 write(tarfile, buf, BLKSIZE);
             }
+            close(file);
         }
     }
+    close(tarfile);
 }
 
 int main(int argc, char **argv) {
