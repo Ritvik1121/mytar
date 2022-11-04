@@ -4,6 +4,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <math.h>
+#include "extract.c"
 #define BLOCK 512;
 
 int octaltodec(char *number, int len);
@@ -58,10 +59,72 @@ int main(int argc, char *argv[]){
         j++;
     }
 
-    if(mode == 't'){
+    if(mode == 't') {
         file = open(argv[2], O_RDONLY);
         table_mode(file, v, arguments);
     }
 
+    
+    if(mode == 'x'){
+        file = open(argv[2], O_RDONLY);
+        extractTar(file, v, arguments);
+    }
+    return 0;
+}
 
+int table_mode(int file, int v, char **args){
+    unsigned char buffer[512];
+    int n;
+    int i = 0;
+    int num;
+    int k;
+    char name[200];
+    char size[12];
+    int num_blocks;
+    int new_index;
+
+    while((n = read(file, buffer, 100)) > 0){
+
+        i = 0;
+
+        while(i < 100 || buffer[i] == '\0'){
+            name[i] = buffer[i];
+            i++;
+        }
+
+        if(name[0] == '\0'){
+            return 0;
+        }
+
+        name[i] = '\0';
+        printf("%s\n", name);
+
+        lseek(file, 23, SEEK_CUR);
+        k = read(file, size, 12);
+        num = octaltodec(size, 12);
+
+        if(num == 0){
+            num_blocks = 0;
+        }
+        num_blocks = (num / 512) + 1;
+        new_index = 377 + (512 * num_blocks);
+        lseek(file, new_index, SEEK_CUR);
+    }
+
+
+
+}
+
+int octaltodec(char *number, int len){
+    int i;
+    int curr;
+    int power = 0;
+    int total = 0;
+    for(i = len -1; i > 0; i--){
+
+        curr = number[i] - '0';
+        total = total + (curr * (pow(8, power)));
+        power++;
+    }
+    return total;
 }
