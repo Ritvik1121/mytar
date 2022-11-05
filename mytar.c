@@ -17,6 +17,26 @@
 #define VERSION "00"
 #define BLKSIZE 512
 
+#define NAME_LEN 100
+#define MODE_LEN 8
+#define UID_LEN 8
+#define GID_LEN 8
+#define SIZE_LEN 12
+#define MTIME_LEN 12
+#define CHKSUM_LEN 8
+#define TYPEFLAG_LEN 1
+#define LINKNAME_LEN 100
+#define MAGIC_LEN 6
+#define VERSION_LEN 2
+#define UNAME_LEN 32
+#define GNAME_LEN 32
+#define DEVMAJOR_LEN 8
+#define DEVMINOR_LEN 8
+#define PREFIX_LEN 155
+#define POST_HEADER_LEN 12
+
+#define CHKSUM_OFFSET 148
+
 void sys_error(char *message) {
     perror(message);
     exit(EXIT_FAILURE);
@@ -112,10 +132,12 @@ void tar_create(int argc, char **argv, int flags[6]) {
     struct stat st;
     struct passwd *pwd;
     struct group *grp;
-    char spaces[8] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
-    int zeroes[16] = {0};
-    char name[100] = {'\0'}, prefix[155] = {'\0'}, linkname[100] = {'\0'};
-    char uname[32] = {'\0'}, gname[32] = {'\0'};        /* NULL-terminated */
+    char spaces[CHKSUM_LEN] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
+    int zeroes[DEVMAJOR_LEN + DEVMINOR_LEN] = {0};
+    char name[NAME_LEN] = {'\0'};
+    char prefix[PREFIX_LEN] = {'\0'};
+    char linkname[LINKNAME_LEN] = {'\0'};
+    char uname[UNAME_LEN] = {'\0'}, gname[GNAME_LEN] = {'\0'};  /* NULL-terminated */
     char *buf;
     mode_t mode;
     uid_t uid;
@@ -131,10 +153,12 @@ void tar_create(int argc, char **argv, int flags[6]) {
         if (lstat(argv[i], &st) == -1)
             sys_error("lstat");
 
-        for (namelen = 0; namelen < strlen(argv[i]) && namelen < 100; namelen++) {
+        for (namelen = 0; namelen < strlen(argv[i]) && namelen < NAME_LEN; namelen++) {
+            /* Stores first 100 characters or less of name */
             name[namelen] = argv[i][namelen];
         }
         if (namelen == 100) {
+            /* If name is over 100 chars, put rest in prefix */
             for (; namelen < strlen(argv[i]) || namelen < 255; namelen++) {
                 prefix[namelen - 155] = argv[i][namelen];
             }
@@ -170,59 +194,59 @@ void tar_create(int argc, char **argv, int flags[6]) {
             typeflag = '\0';
         }
 
-        safe_write(tarfile, name, 100);
+        safe_write(tarfile, name, NAME_LEN);
 
-        buf = (char *)malloc(sizeof(char) * 7);
+        buf = (char *)malloc(sizeof(char) * (MODE_LEN - 1));
         mode &= 0xFFF;  // Only care about last 12 bits for permission
-        decToOctal(mode, buf, 7) != 0;
+        decToOctal(mode, buf, 7);
         /* If number too large, use insert_special_int instead */
-        safe_write(tarfile, buf, 7);
+        safe_write(tarfile, buf, MODE_LEN - 1);
         safe_write(tarfile, &nul, 1);
         free(buf);
 
-        buf = (char *)malloc(sizeof(char) * 8);
-        if (insert_special_int(buf, 8, uid) != 0)
+        buf = (char *)malloc(sizeof(char) * UID_LEN);
+        if (insert_special_int(buf, UID_LEN, uid) != 0)
             sys_error("number too large");
-        safe_write(tarfile, buf, 8);
+        safe_write(tarfile, buf, UID_LEN);  // Not null terminated?
         free(buf);
 
-        buf = (char *)malloc(sizeof(char) * 7);
-        buf = decToOctal(gid, buf, 7);
-        safe_write(tarfile, buf, 7);
+        buf = (char *)malloc(sizeof(char) * (GID_LEN - 1));
+        buf = decToOctal(gid, buf, (GID_LEN - 1));
+        safe_write(tarfile, buf, (GID_LEN - 1));
         safe_write(tarfile, &nul, 1);
         free(buf);
 
-        buf = (char *)malloc(sizeof(char) * 11);
-        buf = decToOctal(size, buf, 11);
-        safe_write(tarfile, buf, 11);
+        buf = (char *)malloc(sizeof(char) * (SIZE_LEN - 1));
+        buf = decToOctal(size, buf, SIZE_LEN - 1);
+        safe_write(tarfile, buf, SIZE_LEN - 1);
         safe_write(tarfile, &nul, 1);
         free(buf);
 
-        buf = (char *)malloc(sizeof(char) * 11);
-        buf = decToOctal(mtime, buf, 11);
-        safe_write(tarfile, buf, 11);
+        buf = (char *)malloc(sizeof(char) * (MTIME_LEN - 1));
+        buf = decToOctal(mtime, buf, MTIME_LEN - 1);
+        safe_write(tarfile, buf, MTIME_LEN - 1);
         safe_write(tarfile, &nul, 1);
         free(buf);
 
-        safe_write(tarfile, spaces, 8);    // temporary checksum
+        safe_write(tarfile, spaces, CHKSUM_LEN);    // temporary checksum
 
-        safe_write(tarfile, &typeflag, 1);
+        safe_write(tarfile, &typeflag, TYPEFLAG_LEN);
 
-        safe_write(tarfile, &linkname, 100);
+        safe_write(tarfile, &linkname, LINKNAME_LEN);
 
-        safe_write(tarfile, MAGIC, 6);
+        safe_write(tarfile, MAGIC, MAGIC_LEN);
 
-        safe_write(tarfile, VERSION, 2);
+        safe_write(tarfile, VERSION, VERSION_LEN);
 
-        safe_write(tarfile, uname, 32);
+        safe_write(tarfile, uname, UNAME_LEN);
 
-        safe_write(tarfile, gname, 32);
+        safe_write(tarfile, gname, GNAME_LEN);
 
-        safe_write(tarfile, zeroes, 16);    // devmajor & devminor
+        safe_write(tarfile, zeroes, DEVMAJOR_LEN + DEVMINOR_LEN);    // devmajor & devminor
 
-        safe_write(tarfile, prefix, 155);
+        safe_write(tarfile, prefix, PREFIX_LEN);
 
-        safe_write(tarfile, zeroes, 12);
+        safe_write(tarfile, zeroes, POST_HEADER_LEN);
 
         lseek(tarfile, 0, SEEK_SET);
         buf = (char *)malloc(sizeof(char) * BLKSIZE);
@@ -234,10 +258,10 @@ void tar_create(int argc, char **argv, int flags[6]) {
             chksum_ptr++;
         }
         free(buf);
-        buf = (char *)malloc(sizeof(char) * 7);
-        buf = decToOctal(chksum, buf, 7);
-        lseek(tarfile, 148, SEEK_SET);
-        safe_write(tarfile, buf, 7);
+        buf = (char *)malloc(sizeof(char) * (CHKSUM_LEN - 1));
+        buf = decToOctal(chksum, buf, CHKSUM_LEN - 1);
+        lseek(tarfile, CHKSUM_OFFSET, SEEK_SET);
+        safe_write(tarfile, buf, (CHKSUM_LEN - 1));
         safe_write(tarfile, &nul, 1);
         free(buf);
 
