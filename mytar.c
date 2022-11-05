@@ -12,6 +12,8 @@
 #include <pwd.h>
 #include <grp.h>
 #include <arpa/inet.h>
+#include <dirent.h>
+#include <errno.h>
 
 #define MAGIC "ustar\0"
 #define VERSION "00"
@@ -94,7 +96,7 @@ char *decToOctal(int num, char *buffer, int length) {
 
 void parse_cmd(int argc, char **argv, int flags[6]) {
     /* Parses the command line arguments
-        * Checks for user usage error, sets flags for program */
+     * Checks for user usage error, sets flags for program */
     int i;
 
     if (argc < 3) {
@@ -137,7 +139,7 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
 unsigned int checksum(char *buffer, int length) {
     /* Calculates checksum from given buffer */
     unsigned int chksum = 0, i;
-    unsigned int *chksum_ptr;
+    uint8_t *chksum_ptr;
 
     chksum_ptr = &buffer[0];
     for (i = 0; i < length; i++) {
@@ -147,10 +149,8 @@ unsigned int checksum(char *buffer, int length) {
     return chksum;
 }
 
-void tar_create(int argc, char **argv, int flags[6]) {
-    /* Create file for tar */
-    unsigned int i, j, n, namelen, tarfile, file, chksum = 0;
-    struct stat st;
+void write_header(struct stat st, int tarfile, char *path) {
+    unsigned int j, namelen, chksum = 0;
     struct passwd *pwd;
     struct group *grp;
     char spaces[CHKSUM_LEN] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
@@ -167,141 +167,205 @@ void tar_create(int argc, char **argv, int flags[6]) {
     time_t mtime;
     char typeflag, nul = '\0';
 
-    tarfile = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
-    for (i = 3; i < argc; i++) {
-        /* Loop through path(s) */
-        if (lstat(argv[i], &st) == -1)
-            sys_error("lstat");
-
-        for (namelen = 0; namelen < strlen(argv[i]) && namelen < NAME_LEN; namelen++) {
-            /* Stores first 100 characters or less of name */
-            name[namelen] = argv[i][namelen];
-        }
-        if (namelen == 100) {
-            /* If name is over 100 chars, put rest in prefix */
-            for (; namelen < strlen(argv[i]) || namelen < 255; namelen++) {
-                prefix[namelen - 155] = argv[i][namelen];
-            }
-        }
-        mode = st.st_mode;
-        uid = st.st_uid;
-        gid = st.st_gid;
-        size = st.st_size;
-        mtime = st.st_mtime;
-        if ((pwd = getpwuid(uid)) == NULL) {
-            sys_error("getpwuid");
-        }
-        for (j = 0; j < strlen(pwd->pw_name); j++) {
-            uname[j] = pwd->pw_name[j]; /* May not be null-terminated */
-        }
-        if ((grp = getgrgid(gid)) == NULL) {
-            sys_error("getgrgid");
-        }
-        for (j = 0; j < strlen(grp->gr_name); j++) {
-            gname[j] = grp->gr_name[j]; /* May not be null-terminated */
-        }
-        if (S_ISLNK(mode)) {
-            typeflag = '2';
-            if (readlink(argv[i], linkname, sizeof(linkname)) == -1)
-                sys_error("readlink");
-            /* If name doesn't fit, readlink puts first n bytes */
-        } else if (S_ISREG(mode)) {
-            typeflag = '0';
-        } else if (S_ISDIR(mode)) {
-            typeflag = '5';
-        } else {
-            /* Regular file (alternate)? */
-            typeflag = '\0';
-        }
-
-        safe_write(tarfile, name, NAME_LEN);
-
-        buf = (char *)malloc(sizeof(char) * (MODE_LEN - 1));
-        mode &= 0xFFF;  /* Only care about last 12 bits for permission */
-        buf = decToOctal(mode, buf, MODE_LEN - 1);
-        safe_write(tarfile, buf, MODE_LEN - 1);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * UID_LEN);
-        buf = decToOctal(uid, buf, UID_LEN - 1);    /* make sure to check if uid was long enough or not */
-        safe_write(tarfile, buf, UID_LEN);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * (GID_LEN - 1));
-        buf = decToOctal(gid, buf, (GID_LEN - 1));
-        safe_write(tarfile, buf, (GID_LEN - 1));
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * (SIZE_LEN - 1));
-        buf = decToOctal(size, buf, SIZE_LEN - 1);
-        safe_write(tarfile, buf, SIZE_LEN - 1);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * (MTIME_LEN - 1));
-        buf = decToOctal(mtime, buf, MTIME_LEN - 1);
-        safe_write(tarfile, buf, MTIME_LEN - 1);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        safe_write(tarfile, spaces, CHKSUM_LEN);    /* temporary checksum */
-
-        safe_write(tarfile, &typeflag, TYPEFLAG_LEN);
-
-        safe_write(tarfile, &linkname, LINKNAME_LEN);
-
-        safe_write(tarfile, MAGIC, MAGIC_LEN);
-
-        safe_write(tarfile, VERSION, VERSION_LEN);
-
-        safe_write(tarfile, uname, UNAME_LEN);
-
-        safe_write(tarfile, gname, GNAME_LEN);
-
-        safe_write(tarfile, zeroes, DEVMAJOR_LEN + DEVMINOR_LEN);
-
-        safe_write(tarfile, prefix, PREFIX_LEN);
-
-        safe_write(tarfile, zeroes, POST_HEADER_LEN);
-
-        lseek(tarfile, 0, SEEK_SET);
-        buf = (char *)malloc(sizeof(char) * BLKSIZE);
-        if (read(tarfile, buf, BLKSIZE) == -1)
-            sys_error("read");
-        chksum = checksum(buf, BLKSIZE);
-        free(buf);
-        buf = (char *)malloc(sizeof(char) * (CHKSUM_LEN - 1));
-        buf = decToOctal(chksum, buf, CHKSUM_LEN - 1);
-        lseek(tarfile, CHKSUM_OFFSET, SEEK_SET);
-        safe_write(tarfile, buf, (CHKSUM_LEN - 1));
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        lseek(tarfile, 0, SEEK_END);
-        if (S_ISREG(st.st_mode)) {
-            if ((file = open(argv[i], O_RDONLY)) == -1)
-                sys_error("open");
-            buf = (char *)calloc(BLKSIZE, sizeof(char));
-            while ((n = read(file, buf, BLKSIZE)) > 0) {    /* check read for system error */
-                if (n < BLKSIZE) {
-                    for (j = n; j < BLKSIZE; j++) {
-                        buf[j] = '\0';
-                    }
-                write(tarfile, buf, BLKSIZE);
-                }
-            }
-            free(buf);
-            buf = (char *)calloc(BLKSIZE, sizeof(char));
-            for (j = 0; j < 2; j++) {
-                /* Stop blocks */
-                write(tarfile, buf, BLKSIZE);
-            }
-            free(buf);
-            close(file);
+    for (namelen = 0; namelen < strlen(path) && namelen < NAME_LEN; namelen++) {
+        /* Stores first 100 characters or less of name */
+        name[namelen] = path[namelen];
+    }
+    if (namelen < (NAME_LEN - 1) && S_ISDIR(st.st_mode))
+        name[namelen++] = '/';
+    if (namelen == NAME_LEN) {
+        /* If name is over 100 chars, put rest in prefix */
+        for (; namelen < strlen(path) || namelen < NAME_LEN + PREFIX_LEN; namelen++) {
+            prefix[namelen - PREFIX_LEN] = path[namelen];
         }
     }
+
+    mode = st.st_mode;
+    uid = st.st_uid;
+    gid = st.st_gid;
+    size = st.st_size;
+    mtime = st.st_mtime;
+    if ((pwd = getpwuid(uid)) == NULL) {
+        sys_error("getpwuid");
+    }
+    for (j = 0; j < strlen(pwd->pw_name); j++) {
+        uname[j] = pwd->pw_name[j]; /* May not be null-terminated */
+    }
+    if ((grp = getgrgid(gid)) == NULL) {
+        sys_error("getgrgid");
+    }
+    for (j = 0; j < strlen(grp->gr_name); j++) {
+        gname[j] = grp->gr_name[j]; /* May not be null-terminated */
+    }
+    if (S_ISLNK(mode)) {
+        typeflag = '2';
+        if (readlink(path, linkname, sizeof(linkname)) == -1)
+            sys_error("readlink");
+        /* If name doesn't fit, readlink puts first n bytes */
+    } else if (S_ISREG(mode)) {
+        typeflag = '0';
+    } else if (S_ISDIR(mode)) {
+        typeflag = '5';
+    } else {
+        /* Regular file (alternate)? */
+        typeflag = '\0';
+    }
+
+    safe_write(tarfile, name, NAME_LEN);
+
+    buf = (char *)malloc(sizeof(char) * (MODE_LEN - 1));
+    mode &= 0xFFF;  /* Only care about last 12 bits for permission */
+    buf = decToOctal(mode, buf, MODE_LEN - 1);
+    safe_write(tarfile, buf, MODE_LEN - 1);
+    safe_write(tarfile, &nul, 1);
+    free(buf);
+
+    buf = (char *)malloc(sizeof(char) * UID_LEN);
+    buf = decToOctal(uid, buf, UID_LEN - 1);
+    safe_write(tarfile, buf, UID_LEN);
+    free(buf);
+
+    buf = (char *)malloc(sizeof(char) * (GID_LEN - 1));
+    buf = decToOctal(gid, buf, (GID_LEN - 1));
+    safe_write(tarfile, buf, (GID_LEN - 1));
+    safe_write(tarfile, &nul, 1);
+    free(buf);
+
+    buf = (char *)malloc(sizeof(char) * (SIZE_LEN - 1));
+    if (S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
+        size = 0;
+    buf = decToOctal(size, buf, SIZE_LEN - 1);
+    safe_write(tarfile, buf, SIZE_LEN - 1);
+    safe_write(tarfile, &nul, 1);
+    free(buf);
+
+    buf = (char *)malloc(sizeof(char) * (MTIME_LEN - 1));
+    buf = decToOctal(mtime, buf, MTIME_LEN - 1);
+    safe_write(tarfile, buf, MTIME_LEN - 1);
+    safe_write(tarfile, &nul, 1);
+    free(buf);
+
+    safe_write(tarfile, spaces, CHKSUM_LEN);    /* temporary checksum */
+
+    safe_write(tarfile, &typeflag, TYPEFLAG_LEN);
+
+    safe_write(tarfile, &linkname, LINKNAME_LEN);
+
+    safe_write(tarfile, MAGIC, MAGIC_LEN);
+
+    safe_write(tarfile, VERSION, VERSION_LEN);
+
+    safe_write(tarfile, uname, UNAME_LEN);
+
+    safe_write(tarfile, gname, GNAME_LEN);
+
+    safe_write(tarfile, zeroes, DEVMAJOR_LEN + DEVMINOR_LEN);
+
+    safe_write(tarfile, prefix, PREFIX_LEN);
+
+    safe_write(tarfile, zeroes, POST_HEADER_LEN);
+
+    lseek(tarfile, -BLKSIZE, SEEK_CUR); /* Beginning of header block */
+    buf = (char *)malloc(sizeof(char) * BLKSIZE);
+    if (read(tarfile, buf, BLKSIZE) == -1)
+        sys_error("read");
+    chksum = checksum(buf, BLKSIZE);
+    free(buf);
+    buf = (char *)malloc(sizeof(char) * (CHKSUM_LEN - 1));
+    buf = decToOctal(chksum, buf, CHKSUM_LEN - 1);
+    lseek(tarfile, -BLKSIZE, SEEK_CUR);
+    lseek(tarfile, CHKSUM_OFFSET, SEEK_CUR);
+    safe_write(tarfile, buf, (CHKSUM_LEN - 1));
+    safe_write(tarfile, &nul, 1);
+    free(buf);
+}
+
+void write_data(int tarfile, int file) {
+    /* Write file data into tar file */
+    int i, num_bytes;
+    char *buf;
+
+    buf = (char *)calloc(BLKSIZE, sizeof(char));
+    while ((num_bytes = read(file, buf, BLKSIZE)) > 0) {
+        if (num_bytes < BLKSIZE) {
+            for (i = num_bytes; i < BLKSIZE; i++) {
+                buf[i] = '\0';
+            }
+        safe_write(tarfile, buf, BLKSIZE);
+        }
+    }
+    if (num_bytes == -1)
+        sys_error("write");
+    free(buf);
+    close(file);
+}
+
+void _create_helper(int tarfile, char *filename) {
+    int i, file;
+    struct stat st;
+    char *dir_name, *new_path;
+    DIR *dir_ptr;
+    struct dirent *dir;
+
+    if (lstat(filename, &st) == -1)
+        sys_error("lstat");
+
+    write_header(st, tarfile, filename);
+
+    lseek(tarfile, 0, SEEK_END);
+    if (S_ISREG(st.st_mode)) {
+        /* Write data in file */
+        if ((file = open(filename, O_RDONLY)) == -1)
+            sys_error("open");
+        write_data(tarfile, file);
+    } else if (S_ISDIR(st.st_mode)) {
+        if ((dir_ptr = opendir(filename)) == NULL)
+            sys_error("opendir");
+        errno = 0;
+        while ((dir = readdir(dir_ptr)) != NULL) {
+            if (strcmp(dir->d_name, ".") && strcmp(dir->d_name, "..")) {
+                new_path = (char *)calloc(strlen(dir->d_name) + 2, sizeof(char));
+                i = 0;
+                while (dir->d_name[i] != '\0') {
+                    new_path[i] = dir->d_name[i];
+                    i++;
+                }
+                if ((dir_name = strndup(new_path, strlen(dir->d_name) + 1)) == NULL)
+                    sys_error("strndup");
+                free(new_path);
+                new_path = (char *)malloc(sizeof(char) * (strlen(filename) + strlen(dir->d_name) + 2));
+                memcpy(new_path, filename, strlen(filename));
+                new_path[strlen(filename)] = '/';
+                memcpy(new_path + strlen(filename) + 1, dir_name, strlen(dir_name));
+                _create_helper(tarfile, new_path);
+                free(new_path);
+                free(dir_name);
+            }
+        }
+        if (errno != 0)
+            sys_error("readdir");
+        if (closedir(dir_ptr) == -1)
+            sys_error("closedir");
+    }
+}
+
+void tar_create(int argc, char **argv, int flags[6]) {
+    /* Create file for tar */
+    int i, tarfile;
+    char *buf;
+
+    if ((tarfile = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, S_IRWXU)) == -1)
+        sys_error("open");
+    for (i = 3; i < argc; i++) {
+        /* Loop through path(s) */
+        _create_helper(tarfile, argv[i]);
+    }
+    buf = (char *)calloc(BLKSIZE, sizeof(char));
+    for (i = 0; i < 2; i++) {
+        /* 2 stop blocks */
+        safe_write(tarfile, buf, BLKSIZE);
+    }
+    free(buf);
     close(tarfile);
 }
 
