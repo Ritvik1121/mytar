@@ -73,9 +73,17 @@ int insert_special_int(char *where, size_t size, int32_t val) {
 }
 
 char *decToOctal(int num, char *buffer, int length) {
-    int i;
+    /* Converts decimal num into base octal, stores as string into buffer 
+     * If num is too large to represent, uses insert_special_int() */
+    int i, orig_num = num;
 
     for (i = length - 1; num != 0; i--) {
+        if (i < 0) {
+            /* num cannot fit in [length] octal digits*/
+            if (insert_special_int(buffer, length + 1, orig_num) != 0)
+                sys_error("number too large");
+            return buffer;
+        }
         buffer[i] = (num % 8) + '0';
         num = num / 8;
     }
@@ -126,6 +134,19 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
     }
 }
 
+unsigned int checksum(char *buffer, int length) {
+    /* Calculates checksum from given buffer */
+    unsigned int chksum = 0, i;
+    unsigned int *chksum_ptr;
+
+    chksum_ptr = &buffer[0];
+    for (i = 0; i < length; i++) {
+        chksum += *chksum_ptr;
+        chksum_ptr++;
+    }
+    return chksum;
+}
+
 void tar_create(int argc, char **argv, int flags[6]) {
     /* Create file for tar */
     unsigned int i, j, n, namelen, tarfile, file, chksum = 0;
@@ -145,7 +166,6 @@ void tar_create(int argc, char **argv, int flags[6]) {
     off_t size;
     time_t mtime;
     char typeflag, nul = '\0';
-    uint8_t *chksum_ptr;
 
     tarfile = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
     for (i = 3; i < argc; i++) {
@@ -172,42 +192,40 @@ void tar_create(int argc, char **argv, int flags[6]) {
             sys_error("getpwuid");
         }
         for (j = 0; j < strlen(pwd->pw_name); j++) {
-            uname[j] = pwd->pw_name[j]; // May not be null-terminated
+            uname[j] = pwd->pw_name[j]; /* May not be null-terminated */
         }
         if ((grp = getgrgid(gid)) == NULL) {
             sys_error("getgrgid");
         }
         for (j = 0; j < strlen(grp->gr_name); j++) {
-            gname[j] = grp->gr_name[j]; // May not be null-terminated
+            gname[j] = grp->gr_name[j]; /* May not be null-terminated */
         }
         if (S_ISLNK(mode)) {
             typeflag = '2';
             if (readlink(argv[i], linkname, sizeof(linkname)) == -1)
                 sys_error("readlink");
-                // If name doesn't fit, readlink puts first n bytes in buffer
+            /* If name doesn't fit, readlink puts first n bytes */
         } else if (S_ISREG(mode)) {
             typeflag = '0';
         } else if (S_ISDIR(mode)) {
             typeflag = '5';
         } else {
-            // Regular file (alternate)?
+            /* Regular file (alternate)? */
             typeflag = '\0';
         }
 
         safe_write(tarfile, name, NAME_LEN);
 
         buf = (char *)malloc(sizeof(char) * (MODE_LEN - 1));
-        mode &= 0xFFF;  // Only care about last 12 bits for permission
-        decToOctal(mode, buf, 7);
-        /* If number too large, use insert_special_int instead */
+        mode &= 0xFFF;  /* Only care about last 12 bits for permission */
+        buf = decToOctal(mode, buf, MODE_LEN - 1);
         safe_write(tarfile, buf, MODE_LEN - 1);
         safe_write(tarfile, &nul, 1);
         free(buf);
 
         buf = (char *)malloc(sizeof(char) * UID_LEN);
-        if (insert_special_int(buf, UID_LEN, uid) != 0)
-            sys_error("number too large");
-        safe_write(tarfile, buf, UID_LEN);  // Not null terminated?
+        buf = decToOctal(uid, buf, UID_LEN - 1);    /* make sure to check if uid was long enough or not */
+        safe_write(tarfile, buf, UID_LEN);
         free(buf);
 
         buf = (char *)malloc(sizeof(char) * (GID_LEN - 1));
@@ -228,7 +246,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
         safe_write(tarfile, &nul, 1);
         free(buf);
 
-        safe_write(tarfile, spaces, CHKSUM_LEN);    // temporary checksum
+        safe_write(tarfile, spaces, CHKSUM_LEN);    /* temporary checksum */
 
         safe_write(tarfile, &typeflag, TYPEFLAG_LEN);
 
@@ -242,7 +260,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
 
         safe_write(tarfile, gname, GNAME_LEN);
 
-        safe_write(tarfile, zeroes, DEVMAJOR_LEN + DEVMINOR_LEN);    // devmajor & devminor
+        safe_write(tarfile, zeroes, DEVMAJOR_LEN + DEVMINOR_LEN);
 
         safe_write(tarfile, prefix, PREFIX_LEN);
 
@@ -252,11 +270,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
         buf = (char *)malloc(sizeof(char) * BLKSIZE);
         if (read(tarfile, buf, BLKSIZE) == -1)
             sys_error("read");
-        chksum_ptr = &buf[0];
-        for (j = 0; j < BLKSIZE; j++) {
-            chksum += *chksum_ptr;
-            chksum_ptr++;
-        }
+        chksum = checksum(buf, BLKSIZE);
         free(buf);
         buf = (char *)malloc(sizeof(char) * (CHKSUM_LEN - 1));
         buf = decToOctal(chksum, buf, CHKSUM_LEN - 1);
@@ -270,7 +284,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
             if ((file = open(argv[i], O_RDONLY)) == -1)
                 sys_error("open");
             buf = (char *)calloc(BLKSIZE, sizeof(char));
-            while ((n = read(file, buf, BLKSIZE)) > 0) {    // check read for system error
+            while ((n = read(file, buf, BLKSIZE)) > 0) {    /* check read for system error */
                 if (n < BLKSIZE) {
                     for (j = n; j < BLKSIZE; j++) {
                         buf[j] = '\0';
@@ -284,6 +298,7 @@ void tar_create(int argc, char **argv, int flags[6]) {
                 /* Stop blocks */
                 write(tarfile, buf, BLKSIZE);
             }
+            free(buf);
             close(file);
         }
     }
@@ -296,7 +311,7 @@ int main(int argc, char **argv) {
 
         parse_cmd(argc, argv, flags);
         if (flags[0] == 1)
-                tar_create(argc, argv, flags);
+            tar_create(argc, argv, flags);
         else if (flags[1] == 1)
             tar_list(argv, flags);
         else if (flags[2] == 1)
