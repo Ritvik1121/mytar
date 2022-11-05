@@ -298,7 +298,7 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
     }
 
     write_header(st, tarfile, filename);
-    if (flags[3] == 1) {}
+    if (flags[3] == 1) {
         /* Verbose flag is on */
         printf("%s\n", filename);
     }
