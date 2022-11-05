@@ -49,7 +49,9 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
 }
 
 int main(int argc, char **argv) {
-    /* Comment */
+    /* A version of the standard utility tar(1) 
+     * bundles files and directories together in a single file
+     * so that it can be easily transferred to some other location*/
     int flags[6] = {0};     /* Order: [c, t, x, v, S, f] */
 
     parse_cmd(argc, argv, flags);
