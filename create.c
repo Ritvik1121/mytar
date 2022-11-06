@@ -107,7 +107,7 @@ unsigned int checksum(char *buffer, int length) {
     return chksum;
 }
 
-void write_header(struct stat st, int tarfile, char *path) {
+int write_header(struct stat st, int tarfile, char *path) {
     unsigned int j, namelen, prefixlen, fits, chksum = 0;
     struct passwd *pwd;
     struct group *grp;
@@ -129,28 +129,34 @@ void write_header(struct stat st, int tarfile, char *path) {
     if (strlen(path) <= NAME_LEN) {
         for (namelen = 0; namelen < strlen(path); namelen++)
             name[namelen] = path[namelen];
-        if (namelen < NAME_LEN && S_ISDIR(st.st_mode))
+        if (namelen < NAME_LEN && S_ISDIR(st.st_mode) && name[namelen - 1] != '/')
             name[namelen++] = '/';
     } else {
         fits = 0;
         while (fits == 0) {
-            while (path[prefixlen] != '/' && prefixlen < strlen(path)) {
+            while (path[prefixlen] != '/' && prefixlen < PREFIX_LEN) {
                 /* Copy path into prefix until path can fit into name */
                 prefix[prefixlen] = path[prefixlen];
                 prefixlen++;
             }
-            if ((strlen(path) - prefixlen) < NAME_LEN) {
+            if (prefixlen >= PREFIX_LEN) {
+                printf("%s: unable to construct header.  (Name too long?) Skipping.\n", path);
+                return 1;
+            } else if ((strlen(path) - prefixlen) < NAME_LEN) {
                 fits = 1;
                 break;
             }
-            prefix[prefixlen++] = '/';
+            if (prefixlen > 0 && prefix[prefixlen - 1] != '/')
+                prefix[prefixlen++] = '/';
         }
         memcpy(name, path + prefixlen + 1, strlen(path) - prefixlen);
         /* (prefixlen + 1) to skip the slash in between prefix and name */
         namelen = strlen(path) - (prefixlen + 1);
         /* (prefixlen + 1) to include the '/' skipped over */
-        if (namelen < NAME_LEN && S_ISDIR(st.st_mode))
-            name[namelen] = '/';
+        if (namelen < NAME_LEN && S_ISDIR(st.st_mode)) {
+            if (namelen > 0 && name[namelen - 1] != '/')
+                name[namelen] = '/';
+        }
     }
 
     mode = st.st_mode;
@@ -261,6 +267,7 @@ void write_header(struct stat st, int tarfile, char *path) {
     safe_write(tarfile, buf, (CHKSUM_LEN - 1));
     safe_write(tarfile, &nul, 1);
     free(buf);
+    return 0;
 }
 
 void write_data(int tarfile, char *filename) {
@@ -297,10 +304,14 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
         return 1;
     }
 
-    write_header(st, tarfile, filename);
-    if (flags[3] == 1) {
-        /* Verbose flag is on */
-        printf("%s\n", filename);
+    if (write_header(st, tarfile, filename) == 0) {
+        if (flags[3] == 1) {
+            /* Verbose flag is on */
+            printf("%s", filename);
+            if (S_ISDIR(st.st_mode) && filename[strlen(filename) - 1] != '/')
+                printf("/");
+            printf("\n");
+        }
     }
 
     if (lseek(tarfile, 0, SEEK_END) == -1)
@@ -320,9 +331,13 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
                     sys_error("calloc");
                 /* +2 To fit '/' and '\0' */
                 memcpy(new_path, filename, strlen(filename));
-                new_path[strlen(filename)] = '/';
-                memcpy(new_path + strlen(filename) + 1, dir_name, strlen(dir_name));
-                /* +1 To account for '/' */
+                if (strlen(filename) > 0 && new_path[strlen(filename) - 1] != '/') {
+                    new_path[strlen(filename)] = '/';
+                    memcpy(new_path + strlen(filename) + 1, dir_name, strlen(dir_name));
+                    /* +1 To account for '/' */
+                } else {
+                    memcpy(new_path + strlen(filename), dir_name, strlen(dir_name));
+                }
                 _create_helper(tarfile, new_path, flags);
                 free(new_path);
                 free(dir_name);
