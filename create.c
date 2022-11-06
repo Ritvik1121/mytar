@@ -74,16 +74,22 @@ int insert_special_int(char *where, size_t size, int32_t val) {
     return err;
 }
 
-char *decToOctal(int num, char *buffer, int length) {
-    /* Converts decimal num into base octal, stores as string into buffer 
-     * If num is too large to represent, uses insert_special_int() */
+char *decToOctal(int num, char *buffer, int length, int flags[6]) {
+    /* Converts decimal num into base octal, stores it as string into buffer 
+     * If num is too large to represent, uses insert_special_int() unless
+     * Strict flag is on, in which NULL is returned */
     int i, orig_num = num;
 
     for (i = length - 1; num != 0; i--) {
         if (i < 0) {
             /* num cannot fit in [length] octal digits*/
+            if (flags[4] == 1) {
+                /* Strict flag is turned on */
+                printf("octal value too long. (0%o)\n", orig_num);
+                return NULL;
+            }
             if (insert_special_int(buffer, length + 1, orig_num) != 0)
-                sys_error("number too large");                              // Find better error handling
+                sys_error("number too large");    // Find better error handling
             return buffer;
         }
         buffer[i] = (num % 8) + '0';
@@ -107,7 +113,11 @@ unsigned int checksum(char *buffer, int length) {
     return chksum;
 }
 
-int write_header(struct stat st, int tarfile, char *path) {
+int write_header(struct stat st, int tarfile, char *path, int flags[6]) {
+    /* Takes in a struct stat and path string, writes the header block 
+     * Return value of 0: No error
+     * Return value of 1: path is too long to fit in name and prefix fields
+     * Return value of 2: number is too long to be represented in octal */
     unsigned int j, namelen, prefixlen, fits, chksum = 0;
     struct passwd *pwd;
     struct group *grp;
@@ -129,7 +139,7 @@ int write_header(struct stat st, int tarfile, char *path) {
     if (strlen(path) <= NAME_LEN) {
         for (namelen = 0; namelen < strlen(path); namelen++)
             name[namelen] = path[namelen];
-        if (namelen < NAME_LEN && S_ISDIR(st.st_mode) && name[namelen - 1] != '/')
+        if (namelen<NAME_LEN && S_ISDIR(st.st_mode) && name[namelen-1] != '/')
             name[namelen++] = '/';
     } else {
         fits = 0;
@@ -140,7 +150,8 @@ int write_header(struct stat st, int tarfile, char *path) {
                 prefixlen++;
             }
             if (prefixlen >= PREFIX_LEN) {
-                printf("%s: unable to construct header.  (Name too long?) Skipping.\n", path);
+                printf("%s: unable to construct header.  ", path);
+                printf("(Name too long?) Skipping.\n");
                 return 1;
             } else if ((strlen(path) - prefixlen) < NAME_LEN) {
                 fits = 1;
@@ -153,8 +164,8 @@ int write_header(struct stat st, int tarfile, char *path) {
         /* (prefixlen + 1) to skip the slash in between prefix and name */
         namelen = strlen(path) - (prefixlen + 1);
         /* (prefixlen + 1) to include the '/' skipped over */
-        if (namelen < NAME_LEN && S_ISDIR(st.st_mode)) {
-            if (namelen > 0 && name[namelen - 1] != '/')
+        if (namelen > 0 && namelen < NAME_LEN && S_ISDIR(st.st_mode)) {
+            if (name[namelen - 1] != '/')
                 name[namelen] = '/';
         }
     }
@@ -195,20 +206,29 @@ int write_header(struct stat st, int tarfile, char *path) {
     if ((buf = (char *)malloc(sizeof(char) * (MODE_LEN - 1))) == NULL)
         sys_error("malloc");
     mode &= 0xFFF;  /* Only care about last 12 bits for permission */
-    buf = decToOctal(mode, buf, MODE_LEN - 1);
+    if ((buf = decToOctal(mode, buf, MODE_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     safe_write(tarfile, buf, MODE_LEN - 1);
     safe_write(tarfile, &nul, 1);
     free(buf);
 
     if ((buf = (char *)malloc(sizeof(char) * UID_LEN)) == NULL)
         sys_error("malloc");
-    buf = decToOctal(uid, buf, UID_LEN - 1);
+    if ((buf = decToOctal(uid, buf, UID_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     safe_write(tarfile, buf, UID_LEN);
     free(buf);
 
     if ((buf = (char *)malloc(sizeof(char) * (GID_LEN - 1))) == NULL)
         sys_error("malloc");
-    buf = decToOctal(gid, buf, (GID_LEN - 1));
+    if ((buf = decToOctal(gid, buf, GID_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     safe_write(tarfile, buf, (GID_LEN - 1));
     safe_write(tarfile, &nul, 1);
     free(buf);
@@ -217,14 +237,20 @@ int write_header(struct stat st, int tarfile, char *path) {
         sys_error("malloc");
     if (S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
         size = 0;
-    buf = decToOctal(size, buf, SIZE_LEN - 1);
+    if ((buf = decToOctal(size, buf, SIZE_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     safe_write(tarfile, buf, SIZE_LEN - 1);
     safe_write(tarfile, &nul, 1);
     free(buf);
 
     if ((buf = (char *)malloc(sizeof(char) * (MTIME_LEN - 1))) == NULL)
         sys_error("malloc");
-    buf = decToOctal(mtime, buf, MTIME_LEN - 1);
+    if ((buf = decToOctal(mtime, buf, MTIME_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     safe_write(tarfile, buf, MTIME_LEN - 1);
     safe_write(tarfile, &nul, 1);
     free(buf);
@@ -259,7 +285,10 @@ int write_header(struct stat st, int tarfile, char *path) {
     free(buf);
     if ((buf = (char *)malloc(sizeof(char) * (CHKSUM_LEN - 1))) == NULL)
         sys_error("malloc");
-    buf = decToOctal(chksum, buf, CHKSUM_LEN - 1);
+    if ((buf = decToOctal(chksum, buf, CHKSUM_LEN - 1, flags)) == NULL) {
+        printf("%s: Unable to create conforming header.  Skipping.\n", path);
+        return 2;
+    }
     if (lseek(tarfile, -BLKSIZE, SEEK_CUR) == -1)
         sys_error("lseek");
     if (lseek(tarfile, CHKSUM_OFFSET, SEEK_CUR) == -1)
@@ -301,10 +330,11 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
 
     if (lstat(filename, &st) == -1) {
         /* Cannot stat file, continue to next one */
+        fprintf(stderr, "%s: No such file or directory\n", filename);
         return 1;
     }
 
-    if (write_header(st, tarfile, filename) == 0) {
+    if (write_header(st, tarfile, filename, flags) == 0) {
         if (flags[3] == 1) {
             /* Verbose flag is on */
             printf("%s", filename);
@@ -327,16 +357,20 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
             if (strcmp(dir->d_name, ".") && strcmp(dir->d_name, "..")) {
                 if (!(dir_name = strndup(dir->d_name, strlen(dir->d_name))))
                     sys_error("strndup");
-                if ((new_path = (char *)calloc(sizeof(char), (strlen(filename) + strlen(dir->d_name) + 2))) == NULL)
+                if ((new_path = (char *)calloc(sizeof(char), 
+                        (strlen(filename) + strlen(dir->d_name) + 2))) == NULL)
                     sys_error("calloc");
                 /* +2 To fit '/' and '\0' */
                 memcpy(new_path, filename, strlen(filename));
-                if (strlen(filename) > 0 && new_path[strlen(filename) - 1] != '/') {
+                if (strlen(filename) > 0 && 
+                        new_path[strlen(filename) - 1] != '/') {
                     new_path[strlen(filename)] = '/';
-                    memcpy(new_path + strlen(filename) + 1, dir_name, strlen(dir_name));
+                    memcpy(new_path + strlen(filename) + 1, 
+                            dir_name, strlen(dir_name));
                     /* +1 To account for '/' */
                 } else {
-                    memcpy(new_path + strlen(filename), dir_name, strlen(dir_name));
+                    memcpy(new_path + strlen(filename), 
+                            dir_name, strlen(dir_name));
                 }
                 _create_helper(tarfile, new_path, flags);
                 free(new_path);
