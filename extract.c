@@ -9,7 +9,9 @@
 #include <grp.h>
 #include <arpa/inet.h>
 #include <inttypes.h>
+#include <utime.h>
 #define BLOCK 512
+#define BACKTWOBLOCK -1024
 
 #define NAME_OFFSET 0
 #define MODE_OFFSET 100
@@ -46,6 +48,9 @@
 #define PREFIX_SIZE 155
 #define PADDING_SIZE 12
 #define PATH_SIZE 255
+
+#define MT_DEF_PERMS  (S_IRWXU|S_IRWXG|S_IRWXO)
+#define MT_ALLX_PERMS (S_IXUSR | S_IXGRP | S_IXOTH)
 
 uint32_t extract_special_int (char *where, int len) {
 /* For interoperability with GNU tar. GNU seems to
@@ -98,9 +103,47 @@ int make_path (char *path) {
   return 0;
 }
 
-int check_end(int blocks, char* magic, char* chksum) {
-  
+int check_end(int filename) {
+  char block1[BLOCK] = {0};
+  char block2[BLOCK] = {0};
+  int i = 0, done = 1;
 
+  if (!read(filename, block1, BLOCK))
+    ;
+  if (!read(filename, block2, BLOCK))
+    ;
+    
+  for (i=0; i < BLOCK; i++) {
+      if ( block1[i] != '\0' ) {
+        done = 0;
+        break;
+      }
+    }
+  for (i=0; i < BLOCK; i++) {
+      if ( block2[i] != '\0' ) {
+        done = 0;
+        break;
+      }
+    }
+
+  if (!done)
+    lseek(filename, BACKTWOBLOCK, SEEK_CUR);
+
+  return done;
+}
+
+unsigned int checksum(char *buffer, int length) {
+  unsigned int sum = 0;
+  int i;
+  for (i=0; i < length; i++ )
+    sum += (unsigned char) buffer[i];
+
+  for (i=0; i < CHKSUM_SIZE; i++) {
+    sum -= buffer[CHKSUM_OFFSET + i];
+    sum += ' ';
+  }
+
+  return sum;
 }
 
 /* file has execute give everyone rwx else give everyone rw*/
@@ -128,28 +171,32 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   long file_mode, user, group, filesize, filetime, filechksum;
 
+  unsigned int ensure_cksum = 0;
+
   int inserted, next, done = 0, check, count = 0;
 
-  time_t mod_time;
+  struct utimbuf filetimes;
 
   char *ptr;
   char *contents;
+  char *buf;
 
   u_int32_t spec_uid;
 
-  int i = 3;
+  mode_t new_mode;
 
-  while (done == 0) {
+  while (!(check_end(filename))) {
     count++;
     check = 0;
     read(filename, name, NAME_SIZE);
-      if (name[0] == '\0') {
-        done = 1;
-        break;
-      }
 
     read(filename, mode, MODE_SIZE);
     file_mode = strtoul(mode, &ptr, 8);
+
+    if ( file_mode & MT_ALLX_PERMS )
+      new_mode = MT_DEF_PERMS;      /* with X */
+    else
+      new_mode = MT_DEF_PERMS & ~MT_ALLX_PERMS; /* no X */
 
     read(filename, uid, UID_SIZE);
 
@@ -163,11 +210,10 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     filesize = strtoul(size, &ptr, 8);
 
     read(filename, mtime, MTIME_SIZE);
-    filetime = strtol(mtime, &ptr, 8);
-    mod_time = filetime;
+    filetime = strtoul(mtime, &ptr, 8);
 
     read(filename, chksum, CHKSUM_SIZE);
-    filechksum = strtol(chksum, &ptr, 8);
+    filechksum = strtoul(chksum, &ptr, 8);
 
     read(filename, &typeflag, TYPEFLAG_SIZE);
 
@@ -180,11 +226,6 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     read(filename, magic, MAGIC_SIZE);
     read(filename, version, VERSION_SIZE);
-
-    if (flags[4] == 1) {
-      if (strcmp(magic, "ustar\0") != 0 || strcmp(version, "00") != 0)
-        printf("s-invalid");
-    }
 
     read(filename, uname, UNAME_SIZE);
     read(filename, gname, GNAME_SIZE);
@@ -219,6 +260,30 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
   
     lseek(filename, PADDING_SIZE, SEEK_CUR);
 
+    if (strcmp(magic, "ustar") != 0) {
+      fprintf(stderr, "bad magic number %s\n", magic);
+    }
+
+    if (flags[4] == 1) {
+      if (magic[strlen(magic)] != '\0')
+        fprintf(stderr, "bad magic number %s\n", magic);
+      if (strcmp(version, "00") != 0)
+        fprintf(stderr, "bad verison %s\n", version);
+    }
+
+    buf = (char*)malloc(sizeof(char) * BLOCK);
+
+    lseek(filename, -512, SEEK_CUR);
+
+    read(filename, buf, BLOCK);
+
+    ensure_cksum = checksum(buf, BLOCK);
+
+    free(buf);
+
+    if (filechksum != ensure_cksum) 
+      fprintf(stderr, "bad checksum\n");
+
     if (typeflag == '5') {
       make_path(path);
       mkdir(path, file_mode);
@@ -231,7 +296,7 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     else {
       make_path(path);
-      out = open(path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+      out = open(path, O_RDWR | O_CREAT | O_TRUNC, new_mode);
     }
 
     if (flags[3] == 1) {
@@ -246,11 +311,12 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     free(contents);
 
-    chmod(path, file_mode);
-
-    chown(path, user, group);
-
     stat(path, &sb);
+
+    filetimes.actime = sb.st_atime;
+    filetimes.modtime = filetime;
+
+    utime(path, &filetimes);
 
     inserted = filesize % 512;
     if (inserted != 0){
@@ -294,6 +360,11 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
 
   u_int32_t spec_uid;
 
+  mode_t new_mode;
+
+  unsigned int ensure_cksum = 0;
+  char *buf;
+
   int i = 3;
 
   while (done == 0) {
@@ -306,6 +377,12 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
 
     read(filename, mode, MODE_SIZE);
     file_mode = strtoul(mode, &ptr, 8);
+
+    if ( file_mode & MT_ALLX_PERMS )
+      new_mode = MT_DEF_PERMS;      /* with X */
+    else
+      new_mode = MT_DEF_PERMS & ~MT_ALLX_PERMS; /* no X */
+
 
     read(filename, uid, UID_SIZE);
 
@@ -337,11 +414,6 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
     read(filename, magic, MAGIC_SIZE);
     read(filename, version, VERSION_SIZE);
 
-    if (flags[4] == 1) {
-      if (strcmp(magic, "ustar\0") != 0 || strcmp(version, "00") != 0)
-        printf("s-invalid");
-    }
-
     read(filename, uname, UNAME_SIZE);
     read(filename, gname, GNAME_SIZE);
 
@@ -359,7 +431,6 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
 
     lseek(filename, PADDING_SIZE, SEEK_CUR);
 
-
     for (i = 3; i < argc; i++) {
       if (strstr(path, argv[i]) != NULL) {
         check = 1;
@@ -367,6 +438,29 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
     }
 
     if (check == 1) {
+    if (strncmp(magic, "ustar", strlen(magic)) != 0)
+      fprintf(stderr, "bad magic number %s\n", magic);
+
+    if (flags[4] == 1) {
+      if (magic[strlen(magic)] != '\0')
+        fprintf(stderr, "bad magic number %s\n", magic);
+      if (strcmp(version, "00") != 0)
+        fprintf(stderr, "bad verison %s\n", version);
+    }
+
+    buf = (char*)malloc(sizeof(char) * BLOCK);
+
+    lseek(filename, -512, SEEK_CUR);
+
+    read(filename, buf, BLOCK);
+
+    ensure_cksum = checksum(buf, BLOCK);
+
+    free(buf);
+
+    if (filechksum != ensure_cksum) 
+      fprintf(stderr, "bad checksum\n");
+      
     if (typeflag == '5') {
       make_path(path);
       mkdir(path, file_mode);
@@ -379,7 +473,7 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
 
     else if (typeflag == '0') {
       make_path(path);
-      out = open(path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+      out = open(path, O_RDWR | O_CREAT | O_TRUNC, new_mode);
     }
 
     if (flags[3] == 1) {
@@ -393,8 +487,6 @@ void extractFiles(int filename, int argc, char* argv[], int flags[]) {
     write(out, contents, filesize);
 
     free(contents);
-
-    chmod(path, file_mode);
 
     chown(path, user, group);
 
