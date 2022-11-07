@@ -173,7 +173,7 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   unsigned int ensure_cksum = 0;
 
-  int inserted, next, done = 0, check, count = 0;
+  int inserted, next, done = 0, check = 0, count = 0, idx, i;
 
   struct utimbuf filetimes;
 
@@ -260,7 +260,18 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
   
     lseek(filename, PADDING_SIZE, SEEK_CUR);
 
-    if (strcmp(magic, "ustar") != 0) {
+    if (argc > 3) {
+      for (i = 3; i < argc; i++) {
+      if (strstr(path, argv[i]) != NULL) {
+        check = 1;
+      }
+    }
+    }
+    else
+      check = 1;
+
+    if (check == 1) {
+    if (strncmp("ustar", magic, 5) != 0) {
       fprintf(stderr, "bad magic number %s\n", magic);
     }
 
@@ -325,180 +336,6 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     }
     close(out);
     }
-  close(filename);
-}
-
-void extractFiles(int filename, int argc, char* argv[], int flags[]) {
-  char name[NAME_SIZE] = {0};
-  char mode[MODE_SIZE] = {0};
-  char uid[UID_SIZE] = {0};
-  char gid[GID_SIZE] = {0};
-  char size[SIZE_SIZE] = {0};
-  char mtime[MTIME_SIZE] = {0};
-  char chksum[CHKSUM_SIZE] = {0};
-  char typeflag;
-  char linkname[LINKNAME_SIZE] = {0};
-  char magic[MAGIC_SIZE] = {0};
-  char version[VERSION_SIZE] = {0};
-  char uname[UNAME_SIZE] = {0};
-  char gname[GNAME_SIZE] = {0};
-  char prefix[PREFIX_SIZE] = {0};
-  char path[PATH_SIZE] = {0};
-
-  struct stat sb;
-
-  int out;
-
-  long file_mode, user, group, filesize, filetime, filechksum;
-
-  int inserted, next, done = 0, check;
-
-  time_t mod_time;
-
-  char *ptr;
-  char *contents;
-
-  u_int32_t spec_uid;
-
-  mode_t new_mode;
-
-  unsigned int ensure_cksum = 0;
-  char *buf;
-
-  int i = 3;
-
-  while (done == 0) {
-    check = 0;
-    read(filename, name, NAME_SIZE);
-      if (name[0] == '\0') {
-        done = 1;
-        break;
-      }
-
-    read(filename, mode, MODE_SIZE);
-    file_mode = strtoul(mode, &ptr, 8);
-
-    if ( file_mode & MT_ALLX_PERMS )
-      new_mode = MT_DEF_PERMS;      /* with X */
-    else
-      new_mode = MT_DEF_PERMS & ~MT_ALLX_PERMS; /* no X */
-
-
-    read(filename, uid, UID_SIZE);
-
-    spec_uid = extract_special_int(uid, UID_SIZE);
-    user = spec_uid;
-
-    read(filename, gid, GID_SIZE);
-    group = strtoul(gid, &ptr, 8);
-
-    read(filename, size, SIZE_SIZE);
-    filesize = strtoul(size, &ptr, 8);
-
-    read(filename, mtime, MTIME_SIZE);
-    filetime = strtol(mtime, &ptr, 8);
-    mod_time = filetime;
-
-    read(filename, chksum, CHKSUM_SIZE);
-    filechksum = strtol(chksum, &ptr, 8);
-
-    read(filename, &typeflag, TYPEFLAG_SIZE);
-
-    if(typeflag == '2') {
-      read(filename, linkname, LINKNAME_SIZE);
-    }
-    else {
-      lseek(filename, LINKNAME_SIZE, SEEK_CUR);
-    }
-
-    read(filename, magic, MAGIC_SIZE);
-    read(filename, version, VERSION_SIZE);
-
-    read(filename, uname, UNAME_SIZE);
-    read(filename, gname, GNAME_SIZE);
-
-    lseek(filename, 16, SEEK_CUR);
-
-    read(filename, prefix, PREFIX_SIZE);
-
-    if (prefix[0] != '\0') {
-      strcpy(path, prefix);
-      strcat(path, "/");
-      strcat(path, name);
-    }
-    else
-      strcpy(path, name);
-
-    lseek(filename, PADDING_SIZE, SEEK_CUR);
-
-    for (i = 3; i < argc; i++) {
-      if (strstr(path, argv[i]) != NULL) {
-        check = 1;
-      }
-    }
-
-    if (check == 1) {
-    if (strncmp(magic, "ustar", strlen(magic)) != 0)
-      fprintf(stderr, "bad magic number %s\n", magic);
-
-    if (flags[4] == 1) {
-      if (magic[strlen(magic)] != '\0')
-        fprintf(stderr, "bad magic number %s\n", magic);
-      if (strcmp(version, "00") != 0)
-        fprintf(stderr, "bad verison %s\n", version);
-    }
-
-    buf = (char*)malloc(sizeof(char) * BLOCK);
-
-    lseek(filename, -512, SEEK_CUR);
-
-    read(filename, buf, BLOCK);
-
-    ensure_cksum = checksum(buf, BLOCK);
-
-    free(buf);
-
-    if (filechksum != ensure_cksum) 
-      fprintf(stderr, "bad checksum\n");
-      
-    if (typeflag == '5') {
-      make_path(path);
-      mkdir(path, file_mode);
-    }
-
-    else if (typeflag == '2') {
-      make_path(path);
-      symlink(linkname, path);
-    }
-
-    else if (typeflag == '0') {
-      make_path(path);
-      out = open(path, O_RDWR | O_CREAT | O_TRUNC, new_mode);
-    }
-
-    if (flags[3] == 1) {
-      printf("%s\n", path);
-    }
-
-    contents = malloc(filesize);
-
-    read(filename, contents, filesize);
-
-    write(out, contents, filesize);
-
-    free(contents);
-
-    chown(path, user, group);
-
-    stat(path, &sb);
-
-    inserted = filesize % 512;
-    if (inserted != 0){
-        next = BLOCK - inserted;
-        lseek(filename, next, SEEK_CUR);
-    }
-    close(out);
-    }
-    }
+  }
   close(filename);
 }
