@@ -14,57 +14,6 @@
 #include "extract.c"
 #include <arpa/inet.h>
 
-#define MAGIC "ustar\0"
-#define VERSION "00"
-#define BLKSIZE 512
-
-void sys_error(char *message) {
-    perror(message);
-    exit(EXIT_FAILURE);
-}
-
-void safe_write(int fd, const void *buf, size_t count) {
-    if (write(fd, buf, count) == -1)
-        sys_error("write");
-}
-
-int insert_special_int(char *where, size_t size, int32_t val) {
-    /* For interoperability with GNU tar. GNU seems to
-     * set the high–order bit of the first byte, then
-     * treat the rest of the field as a binary integer
-     * in network byte order.
-     * Insert the given integer into the given field
-     * using this technique. Returns 0 on success, nonzero
-     * otherwise
-     * */
-    int err = 0;
-    if (val < 0 || (size < sizeof(val))) {
-        /* if it’s negative, bit 31 is set and we can’t use the flag
-         * if len is too small, we can’t write it. Either way, we’re
-         * done.
-         * */
-        err++;
-    } else {
-        /* game on... */
-        memset(where, 0, size); /* Clear out buffer */
-        *(int32_t *)(where+size-sizeof(val)) = htonl(val);  /* place the int */
-        *where |= 0x80; /* set the high-order bit */
-    }
-    return err;
-}
-
-char *decToOctal(int num, char *buffer, int length) {
-    int i;
-
-    for (i = length - 1; num != 0; i--) {
-        buffer[i] = (num % 8) + '0';
-        num = num / 8;
-    }
-    while (i >= 0)
-        buffer[i--] = '0';
-    return buffer;
-}
-
 void parse_cmd(int argc, char **argv, int flags[6]) {
     /* Parses the command line arguments
         * Checks for user usage error, sets flags for program */
@@ -113,162 +62,6 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
     }
 }
 
-void tar_create(int argc, char **argv, int flags[6]) {
-    /* Create file for tar */
-    unsigned int i, j, n, namelen, tarfile, file, chksum = 0;
-    struct stat st;
-    struct passwd *pwd;
-    struct group *grp;
-    char spaces[8] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
-    int zeroes[16] = {0};
-    char name[100] = {'\0'}, prefix[155] = {'\0'}, linkname[100] = {'\0'};
-    char uname[32] = {'\0'}, gname[32] = {'\0'};        /* NULL-terminated */
-    char *buf;
-    mode_t mode;
-    uid_t uid;
-    gid_t gid;
-    off_t size;
-    time_t mtime;
-    char typeflag, nul = '\0';
-
-    tarfile = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
-    for (i = 3; i < argc; i++) {
-        /* Loop through path(s) */
-        if (lstat(argv[i], &st) == -1)
-            sys_error("lstat");
-
-        for (namelen = 0; namelen < strlen(argv[i]) && namelen < 100; 
-        namelen++) {
-            name[namelen] = argv[i][namelen];
-        }
-        if (namelen == 100) {
-            for (; namelen < strlen(argv[i]) || namelen < 255; namelen++) {
-                prefix[namelen - 155] = argv[i][namelen];
-            }
-        }
-        mode = st.st_mode;
-        uid = st.st_uid;
-        gid = st.st_gid;
-        size = st.st_size;
-        mtime = st.st_mtime;
-        if ((pwd = getpwuid(uid)) == NULL) {
-            sys_error("getpwuid");
-        }
-        for (j = 0; j < strlen(pwd->pw_name); j++) {
-            uname[j] = pwd->pw_name[j]; // May not be null-terminated
-        }
-        if ((grp = getgrgid(gid)) == NULL) {
-            sys_error("getgrgid");
-        }
-        for (j = 0; j < strlen(grp->gr_name); j++) {
-            gname[j] = grp->gr_name[j]; // May not be null-terminated
-        }
-        if (S_ISLNK(mode)) {
-            typeflag = '2';
-            if (readlink(argv[i], linkname, sizeof(linkname)) == -1)
-                sys_error("readlink");
-                // If name doesn't fit, readlink puts first n bytes in buffer
-        } else if (S_ISREG(mode)) {
-            typeflag = '0';
-        } else if (S_ISDIR(mode)) {
-            typeflag = '5';
-        } else {
-            // Regular file (alternate)?
-            typeflag = '\0';
-        }
-
-        safe_write(tarfile, name, 100);
-
-        buf = (char *)malloc(sizeof(char) * 7);
-        mode &= 0xFFF;  // Only care about last 12 bits for permission
-        decToOctal(mode, buf, 7) != 0;
-        /* If number too large, use insert_special_int instead */
-        safe_write(tarfile, buf, 7);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * 8);
-        if (insert_special_int(buf, 8, uid) != 0)
-            sys_error("number too large");
-        safe_write(tarfile, buf, 8);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * 7);
-        buf = decToOctal(gid, buf, 7);
-        safe_write(tarfile, buf, 7);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * 11);
-        buf = decToOctal(size, buf, 11);
-        safe_write(tarfile, buf, 11);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        buf = (char *)malloc(sizeof(char) * 11);
-        buf = decToOctal(mtime, buf, 11);
-        safe_write(tarfile, buf, 11);
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        safe_write(tarfile, spaces, 8);    // temporary checksum
-
-        safe_write(tarfile, &typeflag, 1);
-
-        safe_write(tarfile, &linkname, 100);
-
-        safe_write(tarfile, MAGIC, 6);
-
-        safe_write(tarfile, VERSION, 2);
-
-        safe_write(tarfile, uname, 32);
-
-        safe_write(tarfile, gname, 32);
-
-        safe_write(tarfile, zeroes, 16);    // devmajor & devminor
-
-        safe_write(tarfile, prefix, 155);
-
-        safe_write(tarfile, zeroes, 12);
-
-        lseek(tarfile, 0, SEEK_SET);
-        buf = (char *)malloc(sizeof(char) * BLKSIZE);
-        if (read(tarfile, buf, BLKSIZE) == -1)
-            sys_error("read");
-        for (j = 0; j < BLKSIZE; j++)
-            chksum += (unsigned int)buf[j];
-        free(buf);
-        buf = (char *)malloc(sizeof(char) * 7);
-        buf = decToOctal(chksum, buf, 7);
-        lseek(tarfile, 148, SEEK_SET);
-        safe_write(tarfile, buf, 7);    // Checksum wrong
-        safe_write(tarfile, &nul, 1);
-        free(buf);
-
-        lseek(tarfile, 0, SEEK_END);
-        if (S_ISREG(st.st_mode)) {
-            if ((file = open(argv[i], O_RDONLY)) == -1)
-                sys_error("open");
-            buf = (char *)calloc(BLKSIZE, sizeof(char));
-            while ((n = read(file, buf, BLKSIZE)) > 0) { 
-                if (n < BLKSIZE) {
-                    for (j = n; j < BLKSIZE; j++) {
-                        buf[j] = '\0';
-                    }
-                write(tarfile, buf, BLKSIZE);
-                }
-            }
-            free(buf);
-            buf = (char *)calloc(BLKSIZE, sizeof(char));
-            for (j = 0; j < 2; j++) {
-                /* Stop blocks */
-                write(tarfile, buf, BLKSIZE);
-            }
-            close(file);
-        }
-    }
-    close(tarfile);
-}
 
 int main(int argc, char **argv) {
         /* Comment */
@@ -276,18 +69,15 @@ int main(int argc, char **argv) {
         int file;
 
         parse_cmd(argc, argv, flags);
-        if (flags[0] == 1)
-            /*tar_create(argc, argv, flags);*/
-            return 1;
-        else if (flags[1] == 1)
+        if (flags[0] == 1) {
+            /*createTar(argc, argv, flags);*/
+        }
+        else if (flags[1] == 1) {
             /*tar_list(argv, flags);*/
-            return 1;
-        else if (flags[2] == 1)
+        }
+        else if (flags[2] == 1) {
             file = open(argv[2], O_RDONLY);
-            if (argc == 3)
-                extractTar(file, argc, argv, flags);
-            else if (argc > 3)
-                extractFiles(file, argc, argv, flags);
-
+            extractTar(file, argc, argv, flags);
+        }
         return 0;
 }

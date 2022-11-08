@@ -46,31 +46,10 @@
 #define DEVMAJOR_SIZE 8
 #define DEVMINOR_SIZE 8
 #define PREFIX_SIZE 155
-#define PADDING_SIZE 12
 #define PATH_SIZE 255
 
-#define MT_DEF_PERMS  (S_IRWXU|S_IRWXG|S_IRWXO)
-#define MT_ALLX_PERMS (S_IXUSR | S_IXGRP | S_IXOTH)
-
-uint32_t extract_special_int (char *where, int len) {
-/* For interoperability with GNU tar. GNU seems to
-* set the high–order bit of the first byte, then
-* treat the rest of the field as a binary integer
-* in network byte order.
-* I don’t know for sure if it’s a 32 or 64–bit int, but for
-* this version, we’ll only support 32. (well, 31)
-* returns the integer on success, –1 on failure.
-* In spite of the name of htonl(), it converts int32 t
-*/
-int32_t val= -1;
-if ( (len >= sizeof(val)) && (where[0] & 0x80)) {
-/* the top bit is set and we have space
-* extract the last four bytes */
-val = *(int32_t *)(where+len-sizeof(val));
-val = ntohl(val); /* convert to host byte order */
-}
-return val;
-}
+#define RW_PERMS  (S_IRWXU|S_IRWXG|S_IRWXO)
+#define X_PERMS (S_IXUSR | S_IXGRP | S_IXOTH)
 
 int make_path (char *path) {
   struct stat sb;
@@ -95,7 +74,7 @@ int make_path (char *path) {
         if (stat(temp, &sb) == 0 && S_ISDIR(sb.st_mode))
           continue;
         else {
-          mkdir(temp, S_IRWXU);
+          mkdir(temp, RW_PERMS);
         }
       }
     }
@@ -151,8 +130,6 @@ unsigned int checksum(char *buffer, int length) {
 void extractTar(int filename, int argc, char* argv[], int flags[]) {
   char name[NAME_SIZE] = {0};
   char mode[MODE_SIZE] = {0};
-  char uid[UID_SIZE] = {0};
-  char gid[GID_SIZE] = {0};
   char size[SIZE_SIZE] = {0};
   char mtime[MTIME_SIZE] = {0};
   char chksum[CHKSUM_SIZE] = {0};
@@ -160,8 +137,6 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
   char linkname[LINKNAME_SIZE] = {0};
   char magic[MAGIC_SIZE] = {0};
   char version[VERSION_SIZE] = {0};
-  char uname[UNAME_SIZE] = {0};
-  char gname[GNAME_SIZE] = {0};
   char prefix[PREFIX_SIZE] = {0};
   char path[PATH_SIZE] = {0};
 
@@ -169,86 +144,86 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   int out;
 
-  long file_mode, user, group, filesize, filetime, filechksum;
+  long file_mode, filesize, filetime, filechksum;
 
   unsigned int ensure_cksum = 0;
 
-  int inserted, next, done = 0, check = 0, count = 0, idx, i;
+  int inserted, next, done = 0, check, idx, i;
 
   struct utimbuf filetimes;
 
   char *ptr;
   char *contents;
-  char *buf;
+  char buf[BLOCK] = {0};
 
   u_int32_t spec_uid;
 
   mode_t new_mode;
 
-  while (!(check_end(filename))) {
-    count++;
-    check = 0;
-    read(filename, name, NAME_SIZE);
+  char headbuf[BLOCK] = {0};
 
-    read(filename, mode, MODE_SIZE);
+  while (!(check_end(filename))) {
+    check = 0;
+    read(filename, headbuf, BLOCK);
+
+    for (i = 0; i < NAME_SIZE; i++) {
+      name[i] = headbuf[i];
+    }
+
+    for (i = 0; i < MODE_SIZE; i++) {
+      mode[i] = headbuf[MODE_OFFSET+i];
+    }
     file_mode = strtoul(mode, &ptr, 8);
 
-    if ( file_mode & MT_ALLX_PERMS )
-      new_mode = MT_DEF_PERMS;      /* with X */
+    if ( file_mode & X_PERMS )
+      new_mode = RW_PERMS;      /* with X */
     else
-      new_mode = MT_DEF_PERMS & ~MT_ALLX_PERMS; /* no X */
+      new_mode = RW_PERMS & ~X_PERMS; /* no X */
 
-    read(filename, uid, UID_SIZE);
-
-    spec_uid = extract_special_int(uid, UID_SIZE);
-    user = spec_uid;
-
-    read(filename, gid, GID_SIZE);
-    group = strtoul(gid, &ptr, 8);
-
-    read(filename, size, SIZE_SIZE);
+    for (i = 0; i < SIZE_SIZE; i++) {
+      size[i] = headbuf[SIZE_OFFSET+i];
+    }
     filesize = strtoul(size, &ptr, 8);
 
-    read(filename, mtime, MTIME_SIZE);
+    for (i = 0; i < MTIME_SIZE; i++) {
+      mtime[i] = headbuf[MTIME_OFFSET+i];
+    }
     filetime = strtoul(mtime, &ptr, 8);
 
-    read(filename, chksum, CHKSUM_SIZE);
+    for (i = 0; i < CHKSUM_SIZE; i++) {
+      chksum[i] = headbuf[CHKSUM_OFFSET+i];
+    }
     filechksum = strtoul(chksum, &ptr, 8);
 
-    read(filename, &typeflag, TYPEFLAG_SIZE);
+    typeflag = headbuf[TYPEFLAG_OFFSET];
 
     if(typeflag == '2') {
-      read(filename, linkname, LINKNAME_SIZE);
+      for (i = 0; i < LINKNAME_SIZE; i++) {
+        linkname[i] = headbuf[LINKNAME_OFFSET+i]; 
     }
-    else {
-      lseek(filename, LINKNAME_SIZE, SEEK_CUR);
     }
 
-    read(filename, magic, MAGIC_SIZE);
-    read(filename, version, VERSION_SIZE);
+    for (i = 0; i < MAGIC_SIZE; i++) {
+        magic[i] = headbuf[MAGIC_OFFSET+i];
+    }
 
-    read(filename, uname, UNAME_SIZE);
-    read(filename, gname, GNAME_SIZE);
+    for (i = 0; i < VERSION_SIZE; i++) {
+        version[i] = headbuf[VERSION_OFFSET+i];
+    }
 
     /*
     printf("%s\n", name);
     printf("%ld\n", file_mode);
-    printf("%" PRIu32 "\n",spec_uid);
-    printf("%ld\n", group);
     printf("%ld\n", filesize);
     printf("%ld\n", filechksum);
     printf("%c\n", typeflag);
     printf("%s\n", magic);
     printf("%c%c\n", version[0],version[1]);
-    printf("%s\n", uname);
-    printf("%s\n", gname);
-
-    fix if given a file in command line
     */
 
-    lseek(filename, 16, SEEK_CUR);
-
-    read(filename, prefix, PREFIX_SIZE);
+    for (i = 0; i < PREFIX_SIZE; i++) {
+      prefix[i] = headbuf[PREFIX_OFFSET+i];
+    }
 
     if (prefix[0] != '\0') {
       strcpy(path, prefix);
@@ -258,8 +233,6 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     else
       strcpy(path, name);
   
-    lseek(filename, PADDING_SIZE, SEEK_CUR);
-
     if (argc > 3) {
       for (i = 3; i < argc; i++) {
       if (strstr(path, argv[i]) != NULL) {
@@ -267,22 +240,26 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
       }
     }
     }
-    else
+    else {
       check = 1;
-
+    }
+    
     if (check == 1) {
     if (strncmp("ustar", magic, 5) != 0) {
       fprintf(stderr, "bad magic number %s\n", magic);
+      exit(EXIT_FAILURE);
     }
 
     if (flags[4] == 1) {
-      if (magic[strlen(magic)] != '\0')
+      if (magic[strlen(magic)] != '\0') {
         fprintf(stderr, "bad magic number %s\n", magic);
-      if (strcmp(version, "00") != 0)
+        exit(EXIT_FAILURE);
+        }
+      if (strcmp(version, "00") != 0) {
         fprintf(stderr, "bad verison %s\n", version);
+        exit(EXIT_FAILURE);
+        }
     }
-
-    buf = (char*)malloc(sizeof(char) * BLOCK);
 
     lseek(filename, -512, SEEK_CUR);
 
@@ -290,14 +267,12 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     ensure_cksum = checksum(buf, BLOCK);
 
-    free(buf);
-
     if (filechksum != ensure_cksum) 
       fprintf(stderr, "bad checksum\n");
 
     if (typeflag == '5') {
       make_path(path);
-      mkdir(path, file_mode);
+      mkdir(path, RW_PERMS);
     }
 
     else if (typeflag == '2') {
@@ -335,6 +310,14 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
         lseek(filename, next, SEEK_CUR);
     }
     close(out);
+    }
+    else {
+      lseek(filename, filesize, SEEK_CUR);
+      inserted = filesize % 512;
+      if (inserted != 0){
+        next = BLOCK - inserted;
+        lseek(filename, next, SEEK_CUR);
+    }
     }
   }
   close(filename);
