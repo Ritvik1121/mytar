@@ -12,7 +12,8 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
     int i;
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
+        fprintf(stderr, 
+                "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
     for (i = 0; i < strlen(argv[1]); i++) {
@@ -29,21 +30,27 @@ void parse_cmd(int argc, char **argv, int flags[6]) {
         else if (argv[1][i] == 'f' && flags[5] != 1)
             flags[5] = 1;
         else {
-            fprintf(stderr, "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
+            fprintf(stderr, 
+                    "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
     if (flags[0] != 1 && flags[1] != 1 && flags[2] != 1 && flags[5] != 1) {
         /* Flag c, t, x, or f are necessary */
-        fprintf(stderr, "%s: you must specify at least one of the 'ctx' options.", argv[0]);
-        fprintf(stderr, "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
+        fprintf(stderr, 
+                "%s: you must specify at least one of the 'ctx' options.", 
+                argv[0]);
+        fprintf(stderr, 
+                "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
         exit(EXIT_FAILURE);
     } else if ((flags[0] == 1 && (flags[1] == 1 || flags[2] == 1)) ||
                 (flags[1] == 1 && (flags[0] == 1 || flags[2] == 1)) ||
                 (flags[2] == 1 && (flags[0] == 1 || flags[1] == 1))) {
         /* Flags c, t, and x cannot be used together */
-        fprintf(stderr, "%s: you must choose one of the 'ctx' options.", argv[0]);
-        fprintf(stderr, "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
+        fprintf(stderr, 
+                "%s: you must choose one of the 'ctx' options.", argv[0]);
+        fprintf(stderr, 
+                "usage: %s [ctxvS]f tarfile [ path [ ... ] ]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 }
@@ -56,11 +63,11 @@ int main(int argc, char **argv) {
 
     parse_cmd(argc, argv, flags);
     if (flags[0] == 1)
-        tar_create(argc, argv, flags);
+        createTar(argc, argv, flags);
     else if (flags[1] == 1)
-        tar_list(argv, flags);
+        listTar(argv, flags);
     else if (flags[2] == 1)
-        tar_extract(argv, flags);
+        extractTar(argv, flags);
 
     return 0;
 }
