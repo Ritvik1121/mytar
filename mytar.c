@@ -3,18 +3,48 @@
 #include <string.h>
 #include <fcntl.h>
 #include <math.h>
+#include <pwd.h>
+#include <grp.h>
+#include <time.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/stat.h>
 #define BLOCK 512;
 
-int octaltodec(char *number, int len);
+
+
 int table_mode(int file, int v, char **args, int argc);
+char *find_permissions(long permissions, char *type);
+
+u_int32_t extract_special_int (char *where, int len) {
+/* For interoperability with GNU tar. GNU seems to
+* set the high–order bit of the first byte, then
+* treat the rest of the field as a binary integer
+* in network byte order.
+* I don’t know for sure if it’s a 32 or 64–bit int, but for
+* this version, we’ll only support 32. (well, 31)
+* returns the integer on success, –1 on failure.
+* In spite of the name of htonl(), it converts int32 t
+*/
+int32_t val= -1;
+if ( (len >= sizeof(val)) && (where[0] & 0x80)) {
+/* the top bit is set and we have space
+* extract the last four bytes */
+val = *(int32_t *)(where+len-sizeof(val));
+val = ntohl(val); /* convert to host byte order */
+}
+return val;
+}
 
 int main(int argc, char *argv[]){
     int i;
     int arg2len;
     int mode;
     int v;
-    int S;
     int file;
+    int j = 0;
+    int count = 0;
+
 
     char **arguments = (char **) malloc(10 * sizeof(char *));
 
@@ -44,14 +74,7 @@ int main(int argc, char *argv[]){
         if(modes[i] == 'v')
             v = 1;
 
-        if(modes[i] == 'S')
-            S = 1;
-
     }
-
-    int j = 0;
-    int count;
-
     for(i = 3; i < argc; i++){
         arguments[j] = argv[i];
         j++;
@@ -62,91 +85,7 @@ int main(int argc, char *argv[]){
         file = open(argv[2], O_RDONLY);
         table_mode(file, v, arguments, count);
     }
+    return 0;
 
 
-}
-
-
-
-int table_mode(int file, int v, char **args, int arg){
-    unsigned char buffer[512];
-    int n;
-    int i = 0;
-    int num;
-    int k;
-    char name[256];
-    char prefix[155];
-    char size[12];
-    int num_blocks;
-    int new_index;
-    int len;
-
-    while((n = read(file, buffer, 100)) > 0){
-
-        /*Get the size*/
-        lseek(file, 23, SEEK_CUR);
-        k = read(file, size, 12);
-        num = octaltodec(size, 12);
-
-        /*Get the prefix*/
-        lseek(file, 210, SEEK_CUR);
-        k = read(file, prefix, 155);
-
-        /*Add prefix if there is something there*/
-        i = 0;
-        if(prefix[0] != '\0'){
-            printf("here");
-            while(i < 155 || prefix[i] != '\0'){
-                name[i] = prefix[i];
-                i++;
-            }
-        }
-
-        /*Add the name field*/
-        while(i < 100 || buffer[i] != '\0'){
-            name[i] = buffer[i];
-            i++;
-        }
-
-        /*check if the name is null if so then stop*/
-        if(name[0] == '\0'){
-            return 0;
-        }
-
-        /*If no arguments then print or else only print descendents*/
-        if(arg == 0){
-            printf("%s\n", name);
-        }
-        else{
-            for(i = 0; i < arg; i++){
-                if(strstr(name, args[i]) != NULL){
-                    printf("%s\n", name);
-                }
-            }
-        }
-
-        /*Get offset to go to next header then lseek*/
-        num_blocks = (num / 512) + 1;
-        if(num == 0){
-            num_blocks = 0;
-        }
-        new_index = 12 + (512 * num_blocks);
-        lseek(file, new_index, SEEK_CUR);
-
-    }
-
-}
-
-int octaltodec(char *number, int len){
-    int i;
-    int curr;
-    int power = 0;
-    int total = 0;
-    for(i = len -1; i > 0; i--){
-
-        curr = number[i] - '0';
-        total = total + (curr * (pow(8, power)));
-        power++;
-    }
-    return total;
 }
