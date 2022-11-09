@@ -1,25 +1,14 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <fcntl.h>
-#include <math.h>
-#include <pwd.h>
-#include <grp.h>
-#include <time.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/stat.h>
-#define BLOCK 512;
+#include "headers.h"
 
-char *find_permissions(long permissions, char *type);
+int table_mode(int file, int *flags, int arg, char **args){
 
-int table_mode(int file, int v, char **args, int arg){
-    char buffer[512] = {0};
+
+    char name[100] = {0};
+    char block[BLOCK];
     int n;
     int i = 0;
     long num;
-    int k;
-    char name[256] = {0};
+    char path[256] = {0};
     char prefix[155]= {0};
     char size[12]= {0};
     int num_blocks;
@@ -31,62 +20,130 @@ int table_mode(int file, int v, char **args, int arg){
     char gid[8]= {0};
     char uname[32] = {0};
     char gname[32] = {0};
-    char checksum[8] = {0};
+    char chksum[8] = {0};
     char typeflag[1] = {0};
     char outstr[20]= {0};
+
+    char magic_number[MAGIC_SIZE];
+    char version[VERSION_SIZE];
+
+    unsigned int cs;
+    unsigned int check;
 
     struct tm *tmp;
     long fmode, ftime;
 
 
 
-    while((n = read(file, buffer, 100)) > 0){
+    while((!(check_end(file)))){
 
+        /*check invalid headers
+         check ustar and check corruption
+         if S mode: check version and magic number termination
+        */
         char *ptr;
-        /*Get the size*/
-        k = read(file, mode, 8);
+        n = read(file, block, BLOCK);
+        if(n == -1){
+            perror("Reading failed");
+            exit(EXIT_FAILURE);
+        }
 
-        k = read(file, uid, 8);
-        k = read(file, gid, 8);
+        for (i = 0; i < NAME_SIZE; i++) {
+            name[i] = block[i];
+        }
 
-        k = read(file, size, 12);
+        for (i = 0; i < MODE_SIZE; i++) {
+            mode[i] = block[MODE_OFFSET+ i];
+        }
+
+        for (i = 0; i < UID_SIZE; i++) {
+            uid[i] = block[UID_OFFSET + i];
+        }
+
+        for (i = 0; i < GID_SIZE; i++) {
+            gid[i] = block[GID_OFFSET + i];
+        }
+
+        for (i = 0; i < SIZE_SIZE; i++) {
+            size[i] = block[SIZE_OFFSET + i];
+        }
         num = strtol(size, &ptr, 8);
 
-        k = read(file, mtime, 12);
+        for (i = 0; i < MTIME_SIZE; i++) {
+            mtime[i] = block[MTIME_OFFSET + i];
+        }
+
         ftime = strtoul(mtime, &ptr, 8);
         tmp = localtime(&ftime);
         strftime(outstr, sizeof(outstr), "%F %H:%M", tmp);
 
-        k = read(file, checksum, 8);
-        k = read(file, typeflag, 1);
-        lseek(file, 108, SEEK_CUR);
-        k = read(file, uname, 32);
-        k = read(file, gname, 32);
+        for (i = 0; i < CHKSUM_SIZE; i++) {
+            chksum[i] = block[CHKSUM_OFFSET + i];
+        }
 
+        for (i = 0; i < MAGIC_SIZE; i++) {
+            magic_number[i] = block[MAGIC_OFFSET + i];
+        }
+
+        for (i = 0; i < VERSION_SIZE; i++) {
+            version[i] = block[VERSION_OFFSET + i];
+        }
+
+       for (i = 0; i < TYPEFLAG_SIZE; i++) {
+            typeflag[i] = block[TYPEFLAG_OFFSET + i];
+        }
+
+        for (i = 0; i < UNAME_SIZE; i++) {
+            uname[i] = block[UNAME_OFFSET + i];
+        }
+
+        for (i = 0; i < GNAME_SIZE; i++) {
+            gname[i] = block[GNAME_OFFSET + i];
+        }
 
         /*Get the prefix*/
-        lseek(file, 16, SEEK_CUR);
-        k = read(file, prefix, 155);
+       for (i = 0; i < PREFIX_SIZE; i++) {
+            prefix[i] = block[PREFIX_OFFSET + i];
+        }
+
+        if (strncmp("ustar", magic_number, 5) != 0) {
+            fprintf(stderr, "bad magic number %s\n", magic_number);
+            exit(EXIT_FAILURE);
+        }
+
+        if (flags[4] == 1) {
+            if (magic_number[strlen(magic_number)-1] != '\0') {
+                fprintf(stderr, "bad magic number %s\n", magic_number);
+                exit(EXIT_FAILURE);
+            }
+            if (strcmp(version, "00") != 0) {
+                fprintf(stderr, "bad verison %s\n", version);
+                exit(EXIT_FAILURE);
+            }
+        }
 
         /*Add prefix if there is something there*/
         i = 0;
         if(prefix[0] != '\0'){
-            strcpy(name, prefix);
-            strcat(name, "/");
-            strcat(name, buffer);
+            strcpy(path, prefix);
+            strcat(path, "/");
+            strcat(path, name);
         }
         else {
-            strcpy(name, buffer);
+            strcpy(path, name);
         }
-
-        /*check if the name is null if so then stop*/
-        if(name[0] == '\0'){
+        cs = checksum(block, 512);
+        check = strtoul(chksum, &ptr, 8);
+        if(cs != check){
+            /*Change this to instead be for checksum*/
             return 0;
         }
 
         /*If no arguments then print or else only print descendents*/
+
         if(arg == 0){
-            if(v == 1){
+
+            if(flags[3] == 1){
 
                 fmode = strtoul(mode, &ptr, 8);
                 permissions = find_permissions(fmode, typeflag);
@@ -98,31 +155,29 @@ int table_mode(int file, int v, char **args, int arg){
                 printf("%s ", outstr); /*time*/
 
             }
-            printf("%s\n", name);
+            printf("%s\n", path);
         }
         else{
+            for(i = 3; i < arg+3; i++){
+                if(strstr(path, args[i]) != NULL){
 
-            for(i = 0; i < arg; i++){
-                if(strstr(name, args[i]) != NULL){
-                    if(v == 1){
+                    /*Change this loop so it only checks prefix of the string*/
+                    if(flags[3] == 1){
                         fmode = strtoul(mode, &ptr, 8);
                         permissions = find_permissions(fmode, typeflag);
                         printf("%s ", permissions);
-
                         printf("%s/%s ", uname, gname);
-
                        /*size */
                         printf("%14ld ", num);
                         printf("%s ", outstr); /*time*/
 
                     }
-                    printf("%s\n", name);
+                    printf("%s\n", path);
                 }
             }
         }
 
         /*Get offset to go to next header then lseek*/
-
         if(num == 0){
             num_blocks = 0;
         }
@@ -130,10 +185,12 @@ int table_mode(int file, int v, char **args, int arg){
             num_blocks = (num / 512) + 1;
         }
 
-        new_index = 12 + (512 * num_blocks);
+        new_index = 512 * num_blocks;
         lseek(file, new_index, SEEK_CUR);
 
     }
+
+    free(permissions);
     return 0;
 }
 
