@@ -125,8 +125,6 @@ unsigned int checksum(char *buffer, int length) {
   return sum;
 }
 
-/* file has execute give everyone rwx else give everyone rw*/
-
 void extractTar(int filename, int argc, char* argv[], int flags[]) {
   char name[NAME_SIZE] = {0};
   char mode[MODE_SIZE] = {0};
@@ -148,15 +146,13 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   unsigned int ensure_cksum = 0;
 
-  int inserted, next, done = 0, check, idx, i;
+  int inserted, next, check, i;
 
   struct utimbuf filetimes;
 
   char *ptr;
   char *contents;
   char buf[BLOCK] = {0};
-
-  u_int32_t spec_uid;
 
   mode_t new_mode;
 
@@ -176,9 +172,9 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     file_mode = strtoul(mode, &ptr, 8);
 
     if ( file_mode & X_PERMS )
-      new_mode = RW_PERMS;      /* with X */
+      new_mode = RW_PERMS;      
     else
-      new_mode = RW_PERMS & ~X_PERMS; /* no X */
+      new_mode = RW_PERMS & ~X_PERMS; 
 
     for (i = 0; i < SIZE_SIZE; i++) {
       size[i] = headbuf[SIZE_OFFSET+i];
@@ -210,16 +206,6 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     for (i = 0; i < VERSION_SIZE; i++) {
         version[i] = headbuf[VERSION_OFFSET+i];
     }
-
-    /*
-    printf("%s\n", name);
-    printf("%ld\n", file_mode);
-    printf("%ld\n", filesize);
-    printf("%ld\n", filechksum);
-    printf("%c\n", typeflag);
-    printf("%s\n", magic);
-    printf("%c%c\n", version[0],version[1]);
-    */
 
     for (i = 0; i < PREFIX_SIZE; i++) {
       prefix[i] = headbuf[PREFIX_OFFSET+i];
@@ -304,20 +290,12 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     utime(path, &filetimes);
 
-    inserted = filesize % 512;
+    inserted = filesize % BLOCK;
     if (inserted != 0){
         next = BLOCK - inserted;
         lseek(filename, next, SEEK_CUR);
     }
     close(out);
-    }
-    else {
-      lseek(filename, filesize, SEEK_CUR);
-      inserted = filesize % 512;
-      if (inserted != 0){
-        next = BLOCK - inserted;
-        lseek(filename, next, SEEK_CUR);
-    }
     }
   }
   close(filename);
