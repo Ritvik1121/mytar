@@ -308,15 +308,13 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     if (typeflag == '5') {
       make_path(path);
-      if (mkdir(path, RW_PERMS) == -1) {
-        perror("mkdir");
-        exit(EXIT_FAILURE);
-      }
+      continue;
     }
 
     else if (typeflag == '2') {
       make_path(path);
       symlink(linkname, path);
+      continue;
     }
     else {
       make_path(path);
