@@ -17,8 +17,8 @@
 #define BACKONEBLOCK -512
 #define BASE 8
 #define USTARNONULL 5
-#define STRICT 3
-#define VERBOSE 4
+#define STRICT 4
+#define VERBOSE 3
 
 #define NAME_OFFSET 0
 #define MODE_OFFSET 100
@@ -308,12 +308,20 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
     if (typeflag == '5') {
       make_path(path);
+      if (flags[VERBOSE] == 1) {
+        printf("%s\n", path);
+      }
       continue;
     }
 
     else if (typeflag == '2') {
       make_path(path);
       symlink(linkname, path);
+
+      if (flags[VERBOSE] == 1) {
+        printf("%s\n", path);
+      }
+
       continue;
     }
     else {
