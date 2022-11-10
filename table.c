@@ -59,22 +59,39 @@ int table_mode(int file, int *flags, int arg, char **args){
             uid[i] = block[UID_OFFSET + i];
         }
         user = strtoul(uid, &ptr, DEC);
+        if (user == ULONG_MAX && errno == ERANGE)  {
+            fprintf(stderr, "stroul overflow\n");
+            exit(EXIT_FAILURE);
+        }
 
         for (i = 0; i < GID_SIZE; i++) {
             gid[i] = block[GID_OFFSET + i];
         }
         group = strtoul(gid, &ptr, DEC);
+        if (group == ULONG_MAX && errno == ERANGE)  {
+            fprintf(stderr, "stroul overflow\n");
+            exit(EXIT_FAILURE);
+        }
 
         for (i = 0; i < SIZE_SIZE; i++) {
             size[i] = block[SIZE_OFFSET + i];
         }
-        num = strtol(size, &ptr, DEC);
+        num = strtoul(size, &ptr, DEC);
+        if (num == ULONG_MAX && errno == ERANGE)  {
+            fprintf(stderr, "stroul overflow\n");
+            exit(EXIT_FAILURE);
+        }
 
         for (i = 0; i < MTIME_SIZE; i++) {
             mtime[i] = block[MTIME_OFFSET + i];
         }
 
         ftime = strtoul(mtime, &ptr, DEC);
+        if (ftime == ULONG_MAX && errno == ERANGE)  {
+            fprintf(stderr, "stroul overflow\n");
+            exit(EXIT_FAILURE);
+        }
+
         tmp = localtime(&ftime);
         strftime(outstr, sizeof(outstr), "%Y-%m-%d %H:%M", tmp);
 
