@@ -10,8 +10,15 @@
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <utime.h>
+#include <limits.h>
+#include <errno.h>
 #define BLOCK 512
 #define BACKTWOBLOCK -1024
+#define BACKONEBLOCK -512
+#define BASE 8
+#define USTARNONULL 5
+#define STRICT 3
+#define VERBOSE 4
 
 #define NAME_OFFSET 0
 #define MODE_OFFSET 100
@@ -51,10 +58,11 @@
 #define RW_PERMS  (S_IRWXU|S_IRWXG|S_IRWXO)
 #define X_PERMS (S_IXUSR | S_IXGRP | S_IXOTH)
 
+
 int make_path (char *path) {
   struct stat sb;
   int len, i, paths = 0;
-  char temp[255] = {0};
+  char temp[PATH_SIZE] = {0};
 
   len = strlen(path);
 
@@ -71,10 +79,13 @@ int make_path (char *path) {
       temp[i] = path[i]; 
       if (path[i] == '/') {
         paths--;
-        if (stat(temp, &sb) == 0 && S_ISDIR(sb.st_mode))
+        if (lstat(temp, &sb) == 0 && S_ISDIR(sb.st_mode))
           continue;
         else {
-          mkdir(temp, RW_PERMS);
+          if (mkdir(temp, RW_PERMS) == -1) {
+            perror("mkdir");
+            exit(EXIT_FAILURE);
+          }
         }
       }
     }
@@ -87,10 +98,15 @@ int check_end(int filename) {
   char block2[BLOCK] = {0};
   int i = 0, done = 1;
 
-  if (!read(filename, block1, BLOCK))
-    ;
-  if (!read(filename, block2, BLOCK))
-    ;
+  if (read(filename, block1, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+  }
+    
+  if (read(filename, block2, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+  }
     
   for (i=0; i < BLOCK; i++) {
       if ( block1[i] != '\0' ) {
@@ -106,7 +122,10 @@ int check_end(int filename) {
     }
 
   if (!done)
-    lseek(filename, BACKTWOBLOCK, SEEK_CUR);
+    if (lseek(filename, BACKTWOBLOCK, SEEK_CUR) == 1) {
+      perror("lseek");
+      exit(EXIT_FAILURE);
+    }
 
   return done;
 }
@@ -142,7 +161,7 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   int out;
 
-  long file_mode, filesize, filetime, filechksum;
+  unsigned long file_mode, filesize, filetime, filechksum;
 
   unsigned int ensure_cksum = 0;
 
@@ -160,7 +179,10 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
 
   while (!(check_end(filename))) {
     check = 0;
-    read(filename, headbuf, BLOCK);
+    if (read(filename, headbuf, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+    }
 
     for (i = 0; i < NAME_SIZE; i++) {
       name[i] = headbuf[i];
@@ -169,7 +191,12 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     for (i = 0; i < MODE_SIZE; i++) {
       mode[i] = headbuf[MODE_OFFSET+i];
     }
-    file_mode = strtoul(mode, &ptr, 8);
+    file_mode = strtoul(mode, &ptr, BASE);
+
+    if (file_mode == ULONG_MAX && errno == ERANGE)  {
+      fprintf(stderr, "strtoul overflow\n");
+      exit(EXIT_FAILURE);
+    }
 
     if ( file_mode & X_PERMS )
       new_mode = RW_PERMS;      
@@ -179,17 +206,32 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     for (i = 0; i < SIZE_SIZE; i++) {
       size[i] = headbuf[SIZE_OFFSET+i];
     }
-    filesize = strtoul(size, &ptr, 8);
+    filesize = strtoul(size, &ptr, BASE);
+
+    if (filesize == ULONG_MAX && errno == ERANGE) {
+      fprintf(stderr, "strtoul overflow\n");  
+      exit(EXIT_FAILURE);
+    }
 
     for (i = 0; i < MTIME_SIZE; i++) {
       mtime[i] = headbuf[MTIME_OFFSET+i];
     }
-    filetime = strtoul(mtime, &ptr, 8);
+    filetime = strtoul(mtime, &ptr, BASE);
+
+    if (filetime == ULONG_MAX && errno == ERANGE) {
+      fprintf(stderr, "strtoul overflow\n");
+      exit(EXIT_FAILURE);
+    }
 
     for (i = 0; i < CHKSUM_SIZE; i++) {
       chksum[i] = headbuf[CHKSUM_OFFSET+i];
     }
-    filechksum = strtoul(chksum, &ptr, 8);
+    filechksum = strtoul(chksum, &ptr, BASE);
+
+    if (filechksum == ULONG_MAX && errno == ERANGE) {
+      fprintf(stderr, "strtoul overflow\n");
+      exit(EXIT_FAILURE);
+    }
 
     typeflag = headbuf[TYPEFLAG_OFFSET];
 
@@ -231,72 +273,106 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     }
     
     if (check == 1) {
-    if (strncmp("ustar", magic, 5) != 0) {
-      fprintf(stderr, "bad magic number %s\n", magic);
+    if (strncmp("ustar", magic, USTARNONULL) != 0) {
+      fprintf(stderr, "bad magic number\n");
       exit(EXIT_FAILURE);
     }
 
-    if (flags[4] == 1) {
+    if (flags[STRICT] == 1) {
       if (magic[strlen(magic)] != '\0') {
-        fprintf(stderr, "bad magic number %s\n", magic);
+        fprintf(stderr, "bad magic number\n");
         exit(EXIT_FAILURE);
         }
       if (strcmp(version, "00") != 0) {
-        fprintf(stderr, "bad verison %s\n", version);
+        fprintf(stderr, "bad verison\n");
         exit(EXIT_FAILURE);
         }
     }
 
-    lseek(filename, -512, SEEK_CUR);
+    if (lseek(filename, BACKONEBLOCK, SEEK_CUR) == -1) {
+      perror("lseek");
+      exit(EXIT_FAILURE);
+    }
 
-    read(filename, buf, BLOCK);
+    if (read(filename, buf, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+    }
 
     ensure_cksum = checksum(buf, BLOCK);
 
-    if (filechksum != ensure_cksum) 
+    if (filechksum != ensure_cksum) {
       fprintf(stderr, "bad checksum\n");
+      exit(EXIT_FAILURE);
+    }
 
     if (typeflag == '5') {
       make_path(path);
-      mkdir(path, RW_PERMS);
+      if (mkdir(path, RW_PERMS) == -1) {
+        perror("mkdir");
+        exit(EXIT_FAILURE);
+      }
     }
 
     else if (typeflag == '2') {
       make_path(path);
       symlink(linkname, path);
     }
-
     else {
       make_path(path);
-      out = open(path, O_RDWR | O_CREAT | O_TRUNC, new_mode);
+      if ((out = open(path, O_RDWR | O_CREAT | O_TRUNC, new_mode)) == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+      }
     }
 
-    if (flags[3] == 1) {
+    if (flags[VERBOSE] == 1) {
       printf("%s\n", path);
     }
 
     contents = malloc(filesize);
+    if (contents == NULL) {
+      perror("malloc");
+      exit(EXIT_FAILURE);
+    }
 
-    read(filename, contents, filesize);
+    if (read(filename, contents, filesize) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+    }
 
-    write(out, contents, filesize);
+    if (write(out, contents, filesize) == -1) {
+      perror("write");
+      exit(EXIT_FAILURE);
+    }
 
     free(contents);
 
-    stat(path, &sb);
+    if (lstat(path, &sb) == -1) {
+      perror("lstat");
+      exit(EXIT_FAILURE);
+    }
 
     filetimes.actime = sb.st_atime;
     filetimes.modtime = filetime;
 
-    utime(path, &filetimes);
+    if (utime(path, &filetimes) == -1) {
+      perror("utime");
+      exit(EXIT_FAILURE);
+    }
 
     inserted = filesize % BLOCK;
     if (inserted != 0){
         next = BLOCK - inserted;
-        lseek(filename, next, SEEK_CUR);
+        if (lseek(filename, next, SEEK_CUR) == 1) {
+          perror("lseek");
+          exit(EXIT_FAILURE);
+        }
     }
-    close(out);
+    if (close(out) == -1) {
+      perror("close");
+      exit(EXIT_FAILURE);      
+    }
     }
   }
-  close(filename);
 }
