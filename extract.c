@@ -205,5 +205,4 @@ void extractTar(int filename, int argc, char* argv[], int flags[]) {
     close(out);
     }
   }
-  close(filename);
 }

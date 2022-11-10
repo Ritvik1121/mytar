@@ -2,27 +2,26 @@
 
 int table_mode(int file, int *flags, int arg, char **args){
 
-
-    char name[100] = {0};
+    char name[NAME_SIZE] = {0};
     char block[BLOCK];
     int n;
     int i = 0;
     long num;
-    char path[256] = {0};
-    char prefix[155]= {0};
-    char size[12]= {0};
+    char path[PATH_SIZE+1] = {0};
+    char prefix[PREFIX_SIZE]= {0};
+    char size[SIZE_SIZE]= {0};
     int num_blocks;
     int new_index;
     char *permissions;
-    char mode[8]= {0};
-    char mtime[12]= {0};
-    char uid[8]= {0};
-    char gid[8]= {0};
-    char uname[32] = {0};
-    char gname[32] = {0};
-    char chksum[8] = {0};
-    char typeflag[1] = {0};
-    char outstr[20]= {0};
+    char mode[MODE_SIZE]= {0};
+    char mtime[MTIME_SIZE]= {0};
+    char uid[UID_SIZE]= {0};
+    char gid[GID_SIZE]= {0};
+    char uname[UNAME_SIZE] = {0};
+    char gname[GNAME_SIZE] = {0};
+    char chksum[CHKSUM_SIZE] = {0};
+    char typeflag[TYPEFLAG_SIZE] = {0};
+    char outstr[OUTTIME_SIZE]= {0};
 
     char magic_number[MAGIC_SIZE];
     char version[VERSION_SIZE];
@@ -31,8 +30,7 @@ int table_mode(int file, int *flags, int arg, char **args){
     unsigned int check;
 
     struct tm *tmp;
-    long fmode, ftime;
-
+    long user, group, fmode, ftime;
 
 
     while((!(check_end(file)))){
@@ -42,6 +40,7 @@ int table_mode(int file, int *flags, int arg, char **args){
          if S mode: check version and magic number termination
         */
         char *ptr;
+
         n = read(file, block, BLOCK);
         if(n == -1){
             perror("Reading failed");
@@ -59,23 +58,25 @@ int table_mode(int file, int *flags, int arg, char **args){
         for (i = 0; i < UID_SIZE; i++) {
             uid[i] = block[UID_OFFSET + i];
         }
+        user = strtoul(uid, &ptr, DEC);
 
         for (i = 0; i < GID_SIZE; i++) {
             gid[i] = block[GID_OFFSET + i];
         }
+        group = strtoul(gid, &ptr, DEC);
 
         for (i = 0; i < SIZE_SIZE; i++) {
             size[i] = block[SIZE_OFFSET + i];
         }
-        num = strtol(size, &ptr, 8);
+        num = strtol(size, &ptr, DEC);
 
         for (i = 0; i < MTIME_SIZE; i++) {
             mtime[i] = block[MTIME_OFFSET + i];
         }
 
-        ftime = strtoul(mtime, &ptr, 8);
+        ftime = strtoul(mtime, &ptr, DEC);
         tmp = localtime(&ftime);
-        strftime(outstr, sizeof(outstr), "%F %H:%M", tmp);
+        strftime(outstr, sizeof(outstr), "%Y-%m-%d %H:%M", tmp);
 
         for (i = 0; i < CHKSUM_SIZE; i++) {
             chksum[i] = block[CHKSUM_OFFSET + i];
@@ -88,6 +89,7 @@ int table_mode(int file, int *flags, int arg, char **args){
         for (i = 0; i < VERSION_SIZE; i++) {
             version[i] = block[VERSION_OFFSET + i];
         }
+
 
        for (i = 0; i < TYPEFLAG_SIZE; i++) {
             typeflag[i] = block[TYPEFLAG_OFFSET + i];
@@ -112,10 +114,11 @@ int table_mode(int file, int *flags, int arg, char **args){
         }
 
         if (flags[4] == 1) {
-            if (magic_number[strlen(magic_number)-1] != '\0') {
+            if (magic_number[strlen(magic_number)] != '\0') {
                 fprintf(stderr, "bad magic number %s\n", magic_number);
                 exit(EXIT_FAILURE);
             }
+
             if (strcmp(version, "00") != 0) {
                 fprintf(stderr, "bad verison %s\n", version);
                 exit(EXIT_FAILURE);
@@ -132,11 +135,15 @@ int table_mode(int file, int *flags, int arg, char **args){
         else {
             strcpy(path, name);
         }
-        cs = checksum(block, 512);
-        check = strtoul(chksum, &ptr, 8);
+
+        cs = checksum(block, BLOCK);
+        check = strtoul(chksum, &ptr, DEC);
         if(cs != check){
+
             /*Change this to instead be for checksum*/
-            return 0;
+            fprintf(stderr, "Corrupted header\n");
+            exit(EXIT_FAILURE);
+
         }
 
         /*If no arguments then print or else only print descendents*/
@@ -145,11 +152,25 @@ int table_mode(int file, int *flags, int arg, char **args){
 
             if(flags[3] == 1){
 
-                fmode = strtoul(mode, &ptr, 8);
+                fmode = strtoul(mode, &ptr, DEC);
                 permissions = find_permissions(fmode, typeflag);
                 printf("%s ", permissions);
+                free(permissions);
 
-                printf("%s/%s ", uname, gname);
+                if(strlen(uname) == 0){
+                    printf("%ld", user);
+                }
+                else {
+                   printf("%s", uname);
+                }
+                printf("/");
+
+                if(strlen(gname) == 0){
+                    printf("%ld", group);
+                }
+                else {
+                   printf("%s ", gname);
+                }
 
                 printf("%14ld ", num);
                 printf("%s ", outstr); /*time*/
@@ -159,14 +180,29 @@ int table_mode(int file, int *flags, int arg, char **args){
         }
         else{
             for(i = 3; i < arg+3; i++){
-                if(strstr(path, args[i]) != NULL){
-
+                int len = strlen(args[i]);
+                if(strncmp(path, args[i], len) == 0){
                     /*Change this loop so it only checks prefix of the string*/
                     if(flags[3] == 1){
-                        fmode = strtoul(mode, &ptr, 8);
+                        fmode = strtoul(mode, &ptr, DEC);
                         permissions = find_permissions(fmode, typeflag);
                         printf("%s ", permissions);
-                        printf("%s/%s ", uname, gname);
+                        free(permissions);
+
+                        if(strlen(uname) == 0){
+                            printf("%ld", user);
+                        }
+                        else {
+                            printf("%s", uname);
+                        }
+                        printf("/");
+
+                        if(strlen(gname) == 0){
+                            printf("%ld", group);
+                        }
+                        else {
+                            printf("%s ", gname);
+                        }
                        /*size */
                         printf("%14ld ", num);
                         printf("%s ", outstr); /*time*/
@@ -182,19 +218,19 @@ int table_mode(int file, int *flags, int arg, char **args){
             num_blocks = 0;
         }
         else {
-            num_blocks = (num / 512) + 1;
+            num_blocks = (num / BLOCK) + 1;
         }
 
-        new_index = 512 * num_blocks;
+        new_index = BLOCK * num_blocks;
         lseek(file, new_index, SEEK_CUR);
 
-    }
 
-    free(permissions);
+    }
     return 0;
 }
 
 char *find_permissions(long permissions, char *type){
+
     char permission[11];
 
     if(type[0] == '2'){
