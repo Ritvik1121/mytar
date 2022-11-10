@@ -117,16 +117,16 @@ int write_header(struct stat st, int tarfile, char *path, int flags[6]) {
      * Return value of 0: No error
      * Return value of 1: path is too long to fit in name and prefix fields
      * Return value of 2: number is too long to be represented in octal */
-    unsigned int j, namelen, prefixlen, fits, chksum = 0;
+    unsigned int fits, chksum = 0;
+    int j, namelen, prefixlen, pathlen;
     struct passwd *pwd;
     struct group *grp;
     char spaces[CHKSUM_SIZE] = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
     int zeroes[DEVMAJOR_SIZE + DEVMINOR_SIZE] = {0};
     char name[NAME_SIZE] = {'\0'};
     char prefix[PREFIX_SIZE] = {'\0'};
-    char linkname[LINKNAME_SIZE] = {'\0'};
     char uname[UNAME_SIZE] = {'\0'}, gname[GNAME_SIZE] = {'\0'};
-    char *buf;
+    char *buf, *linkname;
     mode_t mode;
     uid_t uid;
     gid_t gid;
@@ -135,62 +135,100 @@ int write_header(struct stat st, int tarfile, char *path, int flags[6]) {
     char typeflag;
 
     namelen = prefixlen = 0;
-    if (strlen(path) <= NAME_SIZE) {
-        for (namelen = 0; namelen < strlen(path); namelen++)
-            name[namelen] = path[namelen];
-        if (namelen<NAME_SIZE && S_ISDIR(st.st_mode) && name[namelen-1] != '/')
-            name[namelen++] = '/';
-    } else {
-        fits = 0;
-        while (fits == 0) {
-            while (path[prefixlen] != '/' && prefixlen < PREFIX_SIZE) {
-                /* Copy path into prefix until path can fit into name */
-                prefix[prefixlen] = path[prefixlen];
-                prefixlen++;
-            }
-            if (prefixlen >= PREFIX_SIZE) {
-                printf("%s: unable to construct header.  ", path);
-                printf("(Name too long?) Skipping.\n");
-                return 1;
-            } else if ((strlen(path) - prefixlen) < NAME_SIZE) {
-                fits = 1;
-                break;
-            }
-            if (prefixlen > 0 && prefix[prefixlen - 1] != '/')
-                prefix[prefixlen++] = '/';
-        }
-        memcpy(name, path + prefixlen + 1, strlen(path) - prefixlen);
-        /* (prefixlen + 1) to skip the slash in between prefix and name */
-        namelen = strlen(path) - (prefixlen + 1);
-        /* (prefixlen + 1) to include the '/' skipped over */
-        if (namelen > 0 && namelen < NAME_SIZE && S_ISDIR(st.st_mode)) {
-            if (name[namelen - 1] != '/')
-                name[namelen] = '/';
-        }
+    if (S_ISREG(st.st_mode) || S_ISLNK(st.st_mode) || 
+		(S_ISDIR(st.st_mode) && path[strlen(path) - 1] == '/')) {
+	if (strlen(path) <= NAME_SIZE) {
+	    for (namelen = 0; namelen < strlen(path); namelen++)
+		name[namelen] = path[namelen];
+	} else {
+	    fits = 0;
+	    while (fits == 0) {
+		while (path[prefixlen] != '/' && prefixlen < PREFIX_SIZE) {
+		    // Copy path into prefix until path can fit into name
+		    prefix[prefixlen] = path[prefixlen];
+		    prefixlen++;
+		}
+		if (prefixlen >= PREFIX_SIZE) {
+		    printf("%s: unable to construct header.  ", path);
+		    printf("(Name too long?) Skipping.\n");
+		    return 1;
+		} else if ((strlen(path) - prefixlen - 1) <= NAME_SIZE) {
+		    // -1 to skip over '/'
+		    fits = 1;
+		    break;
+		}
+		prefix[prefixlen++] = '/';
+	    }
+	    memcpy(name, path + prefixlen + 1, strlen(path) - prefixlen);
+	    namelen = strlen(path) - (prefixlen + 1);
+	}
+    } else if (S_ISDIR(st.st_mode) && path[strlen(path) - 1] != '/') {
+	if (strlen(path) <= (NAME_SIZE - 1)) {
+	    for (namelen = 0; namelen < strlen(path); namelen++)
+	        name[namelen] = path[namelen];
+	    name[namelen++] = '/';
+	} else {
+	    fits = 0;
+	    while (fits == 0) {
+		while (path[prefixlen] != '/' && prefixlen < PREFIX_SIZE && 
+				path[prefixlen] != '\0') {
+		    prefix[prefixlen] = path[prefixlen];
+		    prefixlen++;
+		}
+		pathlen = strlen(path);
+		pathlen -= prefixlen;
+		pathlen -= 1;
+		if (prefixlen >= PREFIX_SIZE) {
+		    printf("%s: unable to construct header.  ", path);
+		    printf("(Name too long?) Skipping.\n");
+		    return 1;
+		} else if ((NAME_SIZE - 1) >= pathlen) {
+		    // -1 to skip over '/', -1 for additional '/' at the end
+		    fits = 1;
+		    break;
+		}
+		prefix[prefixlen++] = '/';
+	    }
+	    memcpy(name, path + prefixlen + 1, strlen(path) - prefixlen);
+	    namelen = strlen(path) - (prefixlen + 1);
+	    name[namelen++] = '/';
+	}
     }
-
+	
     mode = st.st_mode;
     uid = st.st_uid;
     gid = st.st_gid;
     size = st.st_size;
     mtime = st.st_mtime;
+
     if ((pwd = getpwuid(uid)) == NULL) {
         sys_error("getpwuid");
+    } else if (strlen(pwd->pw_name) > (UNAME_SIZE - 1)) {
+	fprintf(stderr, "%s: uname too large, skipping\n", pwd->pw_name);
+	return 1;
     }
     for (j = 0; j < strlen(pwd->pw_name); j++) {
-        uname[j] = pwd->pw_name[j]; /* May not be null-terminated */
+        uname[j] = pwd->pw_name[j];
     }
     if ((grp = getgrgid(gid)) == NULL) {
         sys_error("getgrgid");
+    } else if (strlen(grp->gr_name) > (GNAME_SIZE - 1)) {
+	fprintf(stderr, "%s: gname too large, skipping\n", grp->gr_name);
+	return 1;
     }
     for (j = 0; j < strlen(grp->gr_name); j++) {
-        gname[j] = grp->gr_name[j]; /* May not be null-terminated */
+        gname[j] = grp->gr_name[j];
     }
+    if ((linkname = (char *)calloc(LINKNAME_SIZE + 1, sizeof(char))) == NULL)
+        sys_error("calloc");
     if (S_ISLNK(mode)) {
         typeflag = '2';
-        if (readlink(path, linkname, sizeof(linkname)) == -1)
+        if ((j = readlink(path, linkname, LINKNAME_SIZE + 1)) == -1) {
             sys_error("readlink");
-        /* If name doesn't fit, readlink puts first n bytes */
+        } else if (j > LINKNAME_SIZE) {
+            fprintf(stderr, "%s: linkname too long\n", linkname);
+            exit(EXIT_FAILURE);
+        }
     } else if (S_ISREG(mode)) {
         typeflag = '0';
     } else if (S_ISDIR(mode)) {
@@ -254,7 +292,8 @@ int write_header(struct stat st, int tarfile, char *path, int flags[6]) {
 
     safe_write(tarfile, &typeflag, TYPEFLAG_SIZE);
 
-    safe_write(tarfile, &linkname, LINKNAME_SIZE);
+    safe_write(tarfile, linkname, LINKNAME_SIZE);
+    free(linkname);
 
     safe_write(tarfile, MAGIC, MAGIC_SIZE);
 
@@ -335,8 +374,10 @@ int _create_helper(int tarfile, char *filename, int flags[6]) {
                 printf("/");
             printf("\n");
         }
+    } else {
+	/* Skip over */
+	return 0;
     }
-
     if (lseek(tarfile, 0, SEEK_END) == -1)
         sys_error("lseek");
     if (S_ISREG(st.st_mode)) {
