@@ -17,6 +17,11 @@
 #include <limits.h>
 #define BLOCK 512
 #define BACKTWOBLOCK -1024
+#define BACKONEBLOCK -512
+#define BASED 8
+#define USTARNONULL 5
+#define STRICT 4
+#define VERBOSE 3
 
 #define NAME_OFFSET 0
 #define MODE_OFFSET 100
@@ -56,8 +61,8 @@
 #define MAGIC "ustar\0"
 #define VERSION "00"
 
-#define DEC 8
 #define OUTTIME_SIZE 20
+#define PERMLEN 11
 
 #define RW_PERMS  (S_IRWXU|S_IRWXG|S_IRWXO)
 #define X_PERMS (S_IXUSR | S_IXGRP | S_IXOTH)
@@ -67,4 +72,4 @@ int table_mode(int file, int *flags, int arg, char **args);
 int check_end(int filename);
 unsigned int checksum(char *buffer, int length);
 void extractTar(int filename, int argc, char* argv[], int flags[]);
-void createTar(int argc, char **argv, int flags[6]);
+void createTar(int argc, char **argv, int flags[]);

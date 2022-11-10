@@ -5,10 +5,15 @@ int check_end(int filename) {
   char block2[BLOCK] = {0};
   int i = 0, done = 1;
 
-  if (!read(filename, block1, BLOCK))
-    ;
-  if (!read(filename, block2, BLOCK))
-    ;
+  if (read(filename, block1, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+  }
+
+  if (read(filename, block2, BLOCK) == -1) {
+      perror("read");
+      exit(EXIT_FAILURE);
+  }
 
   for (i=0; i < BLOCK; i++) {
       if ( block1[i] != '\0' ) {
@@ -24,7 +29,10 @@ int check_end(int filename) {
     }
 
   if (!done)
-    lseek(filename, BACKTWOBLOCK, SEEK_CUR);
+    if (lseek(filename, BACKTWOBLOCK, SEEK_CUR) == 1) {
+      perror("lseek");
+      exit(EXIT_FAILURE);
+    }
 
   return done;
 }

@@ -23,11 +23,11 @@ int table_mode(int file, int *flags, int arg, char **args){
     char typeflag[TYPEFLAG_SIZE] = {0};
     char outstr[OUTTIME_SIZE]= {0};
 
-    char magic_number[MAGIC_SIZE];
-    char version[VERSION_SIZE];
+    char magic_number[MAGIC_SIZE] = {0};
+    char version[VERSION_SIZE] = {0};
 
-    unsigned int cs;
-    unsigned int check;
+    unsigned int cs = 0;
+    unsigned int check = 0;
 
     struct tm *tmp;
     long user, group, fmode, ftime;
@@ -35,10 +35,7 @@ int table_mode(int file, int *flags, int arg, char **args){
 
     while((!(check_end(file)))){
 
-        /*check invalid headers
-         check ustar and check corruption
-         if S mode: check version and magic number termination
-        */
+        /*read in the first byte which is the header */
         char *ptr;
 
         n = read(file, block, BLOCK);
@@ -47,6 +44,7 @@ int table_mode(int file, int *flags, int arg, char **args){
             exit(EXIT_FAILURE);
         }
 
+	/*read in all the necessary fields*/
         for (i = 0; i < NAME_SIZE; i++) {
             name[i] = block[i];
         }
@@ -58,7 +56,7 @@ int table_mode(int file, int *flags, int arg, char **args){
         for (i = 0; i < UID_SIZE; i++) {
             uid[i] = block[UID_OFFSET + i];
         }
-        user = strtoul(uid, &ptr, DEC);
+        user = strtoul(uid, &ptr, BASED);
         if (user == ULONG_MAX && errno == ERANGE)  {
             fprintf(stderr, "stroul overflow\n");
             exit(EXIT_FAILURE);
@@ -67,7 +65,7 @@ int table_mode(int file, int *flags, int arg, char **args){
         for (i = 0; i < GID_SIZE; i++) {
             gid[i] = block[GID_OFFSET + i];
         }
-        group = strtoul(gid, &ptr, DEC);
+        group = strtoul(gid, &ptr, BASED);
         if (group == ULONG_MAX && errno == ERANGE)  {
             fprintf(stderr, "stroul overflow\n");
             exit(EXIT_FAILURE);
@@ -76,7 +74,7 @@ int table_mode(int file, int *flags, int arg, char **args){
         for (i = 0; i < SIZE_SIZE; i++) {
             size[i] = block[SIZE_OFFSET + i];
         }
-        num = strtoul(size, &ptr, DEC);
+        num = strtoul(size, &ptr, BASED);
         if (num == ULONG_MAX && errno == ERANGE)  {
             fprintf(stderr, "stroul overflow\n");
             exit(EXIT_FAILURE);
@@ -86,13 +84,18 @@ int table_mode(int file, int *flags, int arg, char **args){
             mtime[i] = block[MTIME_OFFSET + i];
         }
 
-        ftime = strtoul(mtime, &ptr, DEC);
+        ftime = strtoul(mtime, &ptr, BASED);
         if (ftime == ULONG_MAX && errno == ERANGE)  {
             fprintf(stderr, "stroul overflow\n");
             exit(EXIT_FAILURE);
         }
 
+	/*change the time to an actual time*/
         tmp = localtime(&ftime);
+        if(tmp == NULL){
+            perror("localtime failed");
+            exit(EXIT_FAILURE);
+        }
         strftime(outstr, sizeof(outstr), "%Y-%m-%d %H:%M", tmp);
 
         for (i = 0; i < CHKSUM_SIZE; i++) {
@@ -125,19 +128,22 @@ int table_mode(int file, int *flags, int arg, char **args){
             prefix[i] = block[PREFIX_OFFSET + i];
         }
 
-        if (strncmp("ustar", magic_number, 5) != 0) {
-            fprintf(stderr, "bad magic number %s\n", magic_number);
+	/*Checks if ustar is right */
+        if (strncmp("ustar", magic_number, MAGIC_SIZE-1) != 0) {
+            fprintf(stderr, "bad magic number\n");
             exit(EXIT_FAILURE);
         }
 
-        if (flags[4] == 1) {
+        if (flags[STRICT] == 1) {
+	    /*Strict mode checks*/
             if (magic_number[strlen(magic_number)] != '\0') {
-                fprintf(stderr, "bad magic number %s\n", magic_number);
+                fprintf(stderr, "bad magic number\n");
                 exit(EXIT_FAILURE);
             }
 
-            if (strcmp(version, "00") != 0) {
-                fprintf(stderr, "bad verison %s\n", version);
+
+            if (strncmp(version, VERSION, 2) != 0) {
+                fprintf(stderr, "bad version\n");
                 exit(EXIT_FAILURE);
             }
         }
@@ -153,27 +159,34 @@ int table_mode(int file, int *flags, int arg, char **args){
             strcpy(path, name);
         }
 
+	/*Checks if the header is invalid*/
         cs = checksum(block, BLOCK);
-        check = strtoul(chksum, &ptr, DEC);
+        check = strtoul(chksum, &ptr, BASED);
+        if (check == ULONG_MAX && errno == ERANGE)  {
+            fprintf(stderr, "stroul overflow\n");
+            exit(EXIT_FAILURE);
+        }
         if(cs != check){
-
-            /*Change this to instead be for checksum*/
             fprintf(stderr, "Corrupted header\n");
             exit(EXIT_FAILURE);
-
         }
 
         /*If no arguments then print or else only print descendents*/
 
         if(arg == 0){
 
-            if(flags[3] == 1){
+            if(flags[VERBOSE] == 1){
 
-                fmode = strtoul(mode, &ptr, DEC);
+                fmode = strtoul(mode, &ptr, BASED);
+                if (fmode == ULONG_MAX && errno == ERANGE)  {
+                    fprintf(stderr, "stroul overflow\n");
+                    exit(EXIT_FAILURE);
+                }
                 permissions = find_permissions(fmode, typeflag);
                 printf("%s ", permissions);
                 free(permissions);
 
+		/*check if symbolic names are present*/
                 if(strlen(uname) == 0){
                     printf("%ld", user);
                 }
@@ -199,9 +212,13 @@ int table_mode(int file, int *flags, int arg, char **args){
             for(i = 3; i < arg+3; i++){
                 int len = strlen(args[i]);
                 if(strncmp(path, args[i], len) == 0){
-                    /*Change this loop so it only checks prefix of the string*/
+                    /*This loop is for named files*/
                     if(flags[3] == 1){
-                        fmode = strtoul(mode, &ptr, DEC);
+                        fmode = strtoul(mode, &ptr, BASED);
+                        if (fmode == ULONG_MAX && errno == ERANGE)  {
+                            fprintf(stderr, "stroul overflow\n");
+                            exit(EXIT_FAILURE);
+                        }
                         permissions = find_permissions(fmode, typeflag);
                         printf("%s ", permissions);
                         free(permissions);
@@ -239,7 +256,11 @@ int table_mode(int file, int *flags, int arg, char **args){
         }
 
         new_index = BLOCK * num_blocks;
-        lseek(file, new_index, SEEK_CUR);
+        if((lseek(file, new_index, SEEK_CUR)) == -1){
+            perror("lseek failed");
+            exit(EXIT_FAILURE);
+        }
+
 
 
     }
@@ -247,8 +268,8 @@ int table_mode(int file, int *flags, int arg, char **args){
 }
 
 char *find_permissions(long permissions, char *type){
-
-    char permission[11];
+	/*gets the permissions and the type of file*/
+    char permission[PERMLEN];
 
     if(type[0] == '2'){
         permission[0] = 'l';
